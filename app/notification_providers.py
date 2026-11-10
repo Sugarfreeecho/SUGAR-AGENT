@@ -30,11 +30,14 @@ async def notify_user(
     session_id: str = "",
     *,
     provider_ids: tuple[str, ...] | None = None,
+    target: dict | None = None,
 ) -> list[str]:
     """Dispatch a notification; ``session_id`` lets providers deep-link to it.
 
     Providers registered with the legacy two-argument signature keep working:
     the session id is appended only when the callback accepts it.
+    ``target`` is an optional validated plugin-page/settings destination that
+    providers with a ``target`` keyword receive; legacy providers ignore it.
     ``provider_ids`` selects specific channels; omitted, all providers receive it.
     """
     failures: list[str] = []
@@ -42,25 +45,33 @@ async def notify_user(
         if provider_ids is not None and provider_id not in provider_ids:
             continue
         try:
+            try:
+                signature = inspect.signature(callback)
+            except (TypeError, ValueError):
+                signature = None
+            kwargs = {}
+            if target is not None and signature is not None:
+                parameters = signature.parameters
+                if "target" in parameters or any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters.values()
+                ):
+                    kwargs["target"] = target
             if not (title or message):
-                value = callback()
+                value = callback(**kwargs)
             elif session_id:
                 args = (title, message, str(session_id))
-                try:
-                    signature = inspect.signature(callback)
-                except (TypeError, ValueError):
-                    signature = None
                 if signature is not None:
                     try:
-                        signature.bind(*args)
+                        signature.bind(*args, **kwargs)
                     except TypeError:
                         # Check compatibility before invoking: a TypeError
                         # raised inside a provider must never cause a retry.
-                        signature.bind(title, message)
+                        signature.bind(title, message, **kwargs)
                         args = (title, message)
-                value = callback(*args)
+                value = callback(*args, **kwargs)
             else:
-                value = callback(title, message)
+                value = callback(title, message, **kwargs)
             if inspect.isawaitable(value):
                 await value
         except Exception as exc:

@@ -106,3 +106,40 @@ def test_toast_selects_matching_application_protocol(tmp_path, desktop, session)
     suffix = "?session=abc-123" if session == "abc-123" else ""
     assert payload["uri"] == f"{scheme}://open-ui{suffix}"
     assert payload["aumid"] == ("com.sugaragent.desktop" if desktop else "SugarAgent.MyAgent.UI")
+
+
+@pytest.mark.parametrize(
+    ("target_env", "suffix"),
+    [
+        ({"SUGARAGENT_NOTIFY_PLUGIN": "demo", "SUGARAGENT_NOTIFY_PAGE": "console"},
+         "&plugin=demo&page=console"),
+        ({"SUGARAGENT_NOTIFY_SECTION": "plugin:demo:accounts"},
+         "&section=plugin%3Ademo%3Aaccounts"),
+    ],
+)
+def test_toast_carries_validated_navigation_target(tmp_path, target_env, suffix):
+    powershell = shutil.which("powershell.exe")
+    if not powershell:
+        pytest.skip("Windows PowerShell is unavailable")
+    source = (ROOT / "app/notify_ui_closed.ps1").read_text(encoding="utf-8")
+    configuration = source.split("# Fallback: the well-known AppID", 1)[0]
+    configuration += '\n$OpenUiLaunchUri\n'
+    script = tmp_path / "toast-target.ps1"
+    script.write_text(configuration, encoding="ascii")
+    env = os.environ.copy()
+    env.update({"SUGARAGENT_DESKTOP": "1", "SUGARAGENT_NOTIFY_SESSION": "abc-123"})
+    for name in ("SUGARAGENT_NOTIFY_PLUGIN", "SUGARAGENT_NOTIFY_PAGE", "SUGARAGENT_NOTIFY_SECTION"):
+        env.pop(name, None)
+    env.update(target_env)
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+        env=env, capture_output=True, text=True, timeout=15, creationflags=hidden_flags(),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"sugaragent-desktop://open-ui?session=abc-123{suffix}"
+
+
+def test_toast_xml_escapes_target_query_separator():
+    source = (ROOT / "app/notify_ui_closed.ps1").read_text(encoding="utf-8")
+    assert "$safeLaunchUri = [System.Security.SecurityElement]::Escape($OpenUiLaunchUri)" in source
+    assert 'launch="$safeLaunchUri"' in source

@@ -66,6 +66,35 @@ def test_restart_worker_stops_starts_and_reports_success(monkeypatch):
     assert launcher.lifecycle_busy is False
 
 
+def test_notification_protocol_extracts_plugin_page_target():
+    activation = tray_launcher._activation_from_protocol_uri(
+        "sugaragent://open-ui?session=abc-123&plugin=demo&page=console"
+    )
+    assert activation == {
+        "session": "abc-123",
+        "target": {"kind": "plugin", "plugin_id": "demo", "page_id": "console"},
+    }
+    assert tray_launcher._activation_from_protocol_uri(
+        "sugaragent://open-ui?section=plugin%3Ademo%3Aaccounts"
+    ) == {
+        "session": "",
+        "target": {"kind": "settings", "section": "plugin:demo:accounts"},
+    }
+    assert tray_launcher._activation_from_protocol_uri(
+        "sugaragent://open-ui?plugin=bad%22"
+    )["target"] is None
+
+
+def test_browser_deep_link_includes_plugin_target():
+    parts = urlsplit(tray_launcher._webui_browser_url(
+        "/", False, "abc-123",
+        {"kind": "plugin", "plugin_id": "demo", "page_id": "console"},
+    ))
+    assert parse_qs(parts.query) == {
+        "session": ["abc-123"], "open_plugin": ["demo"], "open_page": ["console"],
+    }
+
+
 def test_update_launches_external_updater_then_exits(monkeypatch):
     launcher = make_launcher()
     launcher.lifecycle_busy = False

@@ -38,8 +38,27 @@ $OpenUiLaunchUri = "${OpenUiProtocol}://open-ui"
 # Session deep link: the notify dispatcher passes the originating session id,
 # so clicking the toast jumps straight to that conversation.
 $NotifySession = if ($env:SUGARAGENT_NOTIFY_SESSION) { $env:SUGARAGENT_NOTIFY_SESSION } else { "" }
+# Optional plugin page or settings tab. The backend validates it against the
+# enabled plugin catalog; here only the URI shape is constrained.
+$NotifyPlugin = if ($env:SUGARAGENT_NOTIFY_PLUGIN) { $env:SUGARAGENT_NOTIFY_PLUGIN } else { "" }
+$NotifyPage = if ($env:SUGARAGENT_NOTIFY_PAGE) { $env:SUGARAGENT_NOTIFY_PAGE } else { "" }
+$NotifySection = if ($env:SUGARAGENT_NOTIFY_SECTION) { $env:SUGARAGENT_NOTIFY_SECTION } else { "" }
+$TargetQuery = ""
+if ($NotifyPlugin -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+    $TargetQuery = "plugin=" + [System.Uri]::EscapeDataString($NotifyPlugin)
+    if ($NotifyPage -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+        $TargetQuery += "&page=" + [System.Uri]::EscapeDataString($NotifyPage)
+    }
+} elseif ($NotifySection -match '^(general|models|skills|plugins|hooks|mcp|usage|security|schedules|env|paths|plugin:[A-Za-z0-9][A-Za-z0-9._-]{0,127}:[A-Za-z0-9][A-Za-z0-9._-]{0,127})$') {
+    $TargetQuery = "section=" + [System.Uri]::EscapeDataString($NotifySection)
+}
 if ($NotifySession -match '^[A-Za-z0-9][A-Za-z0-9\-]{0,63}$') {
     $OpenUiLaunchUri = "${OpenUiProtocol}://open-ui?session=$NotifySession"
+    if ($TargetQuery) {
+        $OpenUiLaunchUri = "$OpenUiLaunchUri&$TargetQuery"
+    }
+} elseif ($TargetQuery) {
+    $OpenUiLaunchUri = "${OpenUiProtocol}://open-ui?$TargetQuery"
 }
 $WebUiUrl = "http://127.0.0.1:8192/"
 $PythonwPath = Join-Path $Root "python\pythonw.exe"
@@ -122,9 +141,12 @@ function Get-AvailableAppIds {
 function New-SugarAgentToastXml {
     $safeTitle = [System.Security.SecurityElement]::Escape($Title)
     $safeMessage = [System.Security.SecurityElement]::Escape($Message)
+    # A targeted URI contains '&' between query parameters; XML attributes
+    # require it as &amp; before Windows.Data.Xml.Dom will parse the toast.
+    $safeLaunchUri = [System.Security.SecurityElement]::Escape($OpenUiLaunchUri)
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
     $xml.LoadXml(@"
-<toast activationType="protocol" launch="$OpenUiLaunchUri">
+<toast activationType="protocol" launch="$safeLaunchUri">
   <visual>
     <binding template="ToastText02">
       <text id="1">$safeTitle</text>

@@ -730,6 +730,16 @@ test('protocol accepts only desktop UI links and validates session ids', () => {
   assert.equal(api.parseDesktopActivation(['sugaragent-desktop://open-ui/settings']), null)
   assert.equal(api.parseDesktopActivation(['sugaragent-desktop://open-ui?session=%22bad']).session, '')
   assert.equal(api.parseDesktopActivation(['--flag', 'sugaragent-desktop://open-ui?session=abc-123']).session, 'abc-123')
+  const pluginTarget = api.parseDesktopActivation(
+    ['sugaragent-desktop://open-ui?session=abc&plugin=demo&page=console']).target
+  assert.equal(pluginTarget.kind, 'plugin')
+  assert.equal(pluginTarget.plugin_id, 'demo')
+  assert.equal(pluginTarget.page_id, 'console')
+  const settingsTarget = api.parseDesktopActivation(
+    ['sugaragent-desktop://open-ui?section=plugin%3Ademo%3Aaccounts']).target
+  assert.equal(settingsTarget.kind, 'settings')
+  assert.equal(settingsTarget.section, 'plugin:demo:accounts')
+  assert.equal(api.parseDesktopActivation(['sugaragent-desktop://open-ui?plugin=bad%22']).target, null)
 })
 
 test('notification restores desktop window and uses its active backend port without reloading', async () => {
@@ -737,11 +747,14 @@ test('notification restores desktop window and uses its active backend port with
   api.port(8195)
   api.createWindow()
   api.ready()
-  app.emit('second-instance', {}, ['sugaragent-desktop://open-ui?session=abc-123'])
+  app.emit('second-instance', {}, ['sugaragent-desktop://open-ui?session=abc-123&plugin=demo&page=console'])
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(calls.restored && calls.shown && calls.focused, true)
   assert.equal(calls.requests[0].options.port, 8195)
   assert.equal(calls.requests[0].body.session, 'abc-123')
+  assert.equal(calls.requests[0].body.target.kind, 'plugin')
+  assert.equal(calls.requests[0].body.target.plugin_id, 'demo')
+  assert.equal(calls.requests[0].body.target.page_id, 'console')
   assert.equal(calls.loads.length, 0)
   assert.equal(calls.external, undefined)
 })
@@ -783,6 +796,19 @@ test('missing page heartbeat falls back to a session URL inside the desktop wind
   await api.activateDesktop({ session: 'abc' })
   assert.equal(calls.loads[0], 'http://127.0.0.1:8196/?session=abc')
   assert.equal(calls.external, undefined)
+})
+
+test('missing page heartbeat keeps the plugin target in the fresh page URL', async () => {
+  const { api, calls } = shellHarness({ reused: false })
+  api.port(8196)
+  api.createWindow()
+  api.ready()
+  await api.activateDesktop({
+    session: 'abc',
+    target: { kind: 'plugin', plugin_id: 'demo', page_id: 'console' },
+  })
+  assert.equal(calls.loads[0],
+    'http://127.0.0.1:8196/?session=abc&open_plugin=demo&open_page=console')
 })
 
 test('startup activation queues the session until the window can be loaded', async () => {

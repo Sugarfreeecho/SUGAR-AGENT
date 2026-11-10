@@ -73,6 +73,39 @@ def test_desktop_shell_delivery_preserves_unicode_and_session_without_proxy(monk
     assert captured["timeout"] == 8
 
 
+def test_desktop_shell_delivery_forwards_plugin_navigation_target(monkeypatch):
+    monkeypatch.setenv("SUGARAGENT_DESKTOP", "1")
+    monkeypatch.setenv("SUGARAGENT_NOTIFY_PORT", "12345")
+    monkeypatch.setenv("SUGARAGENT_NOTIFY_TOKEN", "per-launch-secret")
+    captured = {}
+
+    class Opener:
+        def open(self, request, timeout):
+            captured["request"] = request
+            return self
+
+        def __enter__(self):
+            self.status = 200
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(desktop_notify, "build_opener", lambda _handler: Opener())
+    monkeypatch.setattr(
+        desktop_notify, "_notify_windows_toast",
+        lambda *args: (_ for _ in ()).throw(AssertionError("unexpected fallback")),
+    )
+    target = {"kind": "plugin", "plugin_id": "demo", "page_id": "console"}
+
+    desktop_notify.show_desktop_notification("SugarAgent", "Completed", "session-1", target)
+
+    assert json.loads(captured["request"].data) == {
+        "title": "SugarAgent", "message": "Completed",
+        "session_id": "session-1", "target": target,
+    }
+
+
 def test_desktop_shell_unavailable_falls_back_to_platform_toast(monkeypatch):
     monkeypatch.setenv("SUGARAGENT_DESKTOP", "1")
     monkeypatch.setenv("SUGARAGENT_NOTIFY_PORT", "12345")
@@ -150,6 +183,25 @@ def test_windows_toast_does_not_add_action_button_environment(monkeypatch, tmp_p
     assert desktop_notify._notify_windows_toast("SugarAgent", "message") is True
     assert "SUGARAGENT_NOTIFY_ACTION" not in captured["env"]
     assert process.wait_timeouts == [20]
+
+
+def test_windows_toast_forwards_navigation_target_environment(monkeypatch, tmp_path):
+    script = tmp_path / "notify.ps1"
+    script.write_text("exit 0", encoding="ascii")
+    captured = {}
+    monkeypatch.setattr(desktop_notify, "_UI_CLOSED_TOAST_SCRIPT", script)
+    monkeypatch.setattr(
+        desktop_notify.subprocess, "Popen",
+        lambda command, **kwargs: captured.update(env=kwargs["env"]) or _SuccessfulProcess(),
+    )
+
+    assert desktop_notify._notify_windows_toast(
+        "SugarAgent", "message", "session-1",
+        {"kind": "plugin", "plugin_id": "demo", "page_id": "console"},
+    ) is True
+    assert captured["env"]["SUGARAGENT_NOTIFY_PLUGIN"] == "demo"
+    assert captured["env"]["SUGARAGENT_NOTIFY_PAGE"] == "console"
+    assert "SUGARAGENT_NOTIFY_SECTION" not in captured["env"]
 
 
 def test_windows_toast_terminates_timed_out_helper(monkeypatch, tmp_path):

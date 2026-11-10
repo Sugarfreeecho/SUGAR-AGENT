@@ -278,6 +278,7 @@ _desktop_ui_hidden: Optional[bool] = None
 _ui_activation_seq = 0
 _ui_activation_path = "/"
 _ui_activation_session = ""
+_ui_activation_target: Optional[dict[str, Any]] = None
 _last_ui_session_id = ""
 _ui_closed_notify_task: Optional[asyncio.Task] = None
 _ui_attention_notify_lock = threading.Lock()
@@ -6320,6 +6321,7 @@ def _runtime_status_payload() -> dict[str, Any]:
         activation_seq = int(_ui_activation_seq)
         activation_path = str(_ui_activation_path or "/")
         activation_session = str(_ui_activation_session or "")
+        activation_target = dict(_ui_activation_target) if _ui_activation_target else None
     return {
         "ok": True,
         "status": status,
@@ -6331,6 +6333,7 @@ def _runtime_status_payload() -> dict[str, Any]:
         "activation_seq": activation_seq,
         "activation_path": activation_path,
         "activation_session": activation_session,
+        "activation_target": activation_target,
     }
 
 
@@ -6708,8 +6711,19 @@ async def request_ui_activation(request: Request):
         path = "/"
     raw_session = str((data or {}).get("session") or "").strip()
     session = re.sub(r"[^A-Za-z0-9\-]", "", raw_session)[:64]
+    target = None
+    raw_target = (data or {}).get("target")
+    if isinstance(raw_target, dict) and raw_target:
+        try:
+            from ui_activation import normalize_target
+
+            target = await asyncio.to_thread(normalize_target, raw_target)
+        except ValueError as exc:
+            logger.info("UI activation target rejected: %s", exc)
+        except Exception:
+            logger.warning("UI activation target validation failed", exc_info=True)
     now = time.time()
-    global _ui_activation_seq, _ui_activation_path, _ui_activation_session
+    global _ui_activation_seq, _ui_activation_path, _ui_activation_session, _ui_activation_target
     with _ui_presence_lock:
         _ui_presence_prune(now)
         reused = _ui_presence_has_reusable(now)
@@ -6717,8 +6731,12 @@ async def request_ui_activation(request: Request):
             _ui_activation_seq += 1
             _ui_activation_path = path
             _ui_activation_session = session
+            _ui_activation_target = target
         seq = int(_ui_activation_seq)
-    return JSONResponse(content={"ok": True, "reused": reused, "activation_seq": seq})
+    return JSONResponse(content={
+        "ok": True, "reused": reused, "activation_seq": seq,
+        "activation_target": target,
+    })
 
 
 @fastapi_app.delete("/sessions/{session_id}/steer")

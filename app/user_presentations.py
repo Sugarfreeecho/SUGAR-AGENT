@@ -5,7 +5,6 @@ import copy
 import json
 import logging
 import os
-import re
 import uuid
 from functools import partial
 from pathlib import Path
@@ -14,10 +13,14 @@ from urllib.parse import urlsplit
 from agent_fact_commit import run_fact_commit
 from runtime_v2.event_schema import now_iso
 from tool_registry import ToolOutcome
+from ui_activation import (
+    PLUGIN_ID,
+    plugin_target,
+    settings_section,
+    settings_target,
+)
 
 _KINDS = {"webpage", "text", "image", "file", "plugin", "notice", "settings", "notification"}
-_SETTINGS_SECTIONS = {"general", "models", "skills", "plugins", "hooks", "mcp", "usage", "security", "schedules", "env", "paths"}
-_PLUGIN_ID = re.compile(r"[a-z0-9][a-z0-9._-]{0,127}")
 logger = logging.getLogger(__name__)
 
 
@@ -28,21 +31,26 @@ def _text(arguments, key, maximum, *, required=False):
     return value
 
 
-def _plugin_pages():
-    from agent_extensions import plugin_catalog_snapshot
-    return [row for row in plugin_catalog_snapshot().get("ui_contributions", [])
-            if row.get("slot") in {"details.tab", "navigation"} and row.get("target") == "plugin-page"]
+def _notification_target(arguments):
+    """Optional navigation target for a native notification.
 
+    Clicking a notification otherwise only focuses the app or opens its source
+    conversation.  A plugin page or settings tab lets the notification land
+    where the plugin actually needs attention.
+    """
 
-def _settings_section(section):
-    if section in _SETTINGS_SECTIONS:
-        return section
-    if section.startswith("plugin:"):
-        from agent_extensions import plugin_catalog_snapshot
-        for row in plugin_catalog_snapshot().get("ui_contributions", []):
-            if row.get("slot") == "settings.section" and section == f"plugin:{row.get('plugin_id')}:{row.get('id')}":
-                return section
-    raise ValueError("section is not an available settings tab: general, models, skills, plugins, hooks, mcp, usage, security, schedules, env, paths or a declared plugin:<id>:<section>")
+    plugin_id = _text(arguments, "plugin_id", 128).strip()
+    page_id = _text(arguments, "page_id", 128).strip()
+    section = _text(arguments, "section", 264).strip()
+    if plugin_id and section:
+        raise ValueError("notification accepts either plugin_id/page_id or section, not both")
+    if page_id and not plugin_id:
+        raise ValueError("page_id requires plugin_id")
+    if plugin_id:
+        return plugin_target(plugin_id, page_id)
+    if section:
+        return settings_target(section)
+    return None
 
 
 def prepare_presentation(arguments, *, workspace):
@@ -61,8 +69,12 @@ def prepare_presentation(arguments, *, workspace):
             if type(duration) is not int or (duration != 0 and not 1000 <= duration <= 30000):
                 raise ValueError("duration_ms must be 0 (until dismissed) or 1000–30000")
             out["duration_ms"] = duration
+        else:
+            target = _notification_target(arguments)
+            if target:
+                out["activation_target"] = target
     elif kind == "settings":
-        out["section"] = _settings_section(_text(arguments, "section", 264).strip() or "general")
+        out["section"] = settings_section(_text(arguments, "section", 264).strip() or "general")
     elif kind == "webpage":
         url = _text(arguments, "url", 4096, required=True).strip()
         parsed = urlsplit(url)
@@ -96,13 +108,10 @@ def prepare_presentation(arguments, *, workspace):
         if page_id and not plugin_id:
             raise ValueError("page_id requires plugin_id")
         if plugin_id:
-            if not _PLUGIN_ID.fullmatch(plugin_id):
+            if not PLUGIN_ID.fullmatch(plugin_id):
                 raise ValueError("invalid plugin_id")
-            pages = [row for row in _plugin_pages() if row.get("plugin_id") == plugin_id
-                     and (not page_id or row.get("id") == page_id)]
-            if not pages:
-                raise ValueError("plugin page is unavailable; use kind=plugin without plugin_id to open the available plugin catalogue")
-            out.update(plugin_id=plugin_id, page_id=pages[0]["id"])
+            target = plugin_target(plugin_id, page_id)
+            out.update(plugin_id=target["plugin_id"], page_id=target["page_id"])
     return out
 
 
@@ -150,8 +159,11 @@ async def _dispatch_notification(manager, context, presentation):
     else:
         # System notification means the native desktop provider only. Other
         # registered channels must not receive a message as a side effect.
+        options = {}
+        if presentation.get("activation_target"):
+            options["target"] = presentation["activation_target"]
         failures = await notify_user(presentation["title"], presentation["text"], context.session_id,
-                                     provider_ids=("desktop-notifications",))
+                                     provider_ids=("desktop-notifications",), **options)
         status = "failed" if failures else "requested"
     await run_fact_commit(_notification_receipt, path, status, trace_state=context.state)
     return status

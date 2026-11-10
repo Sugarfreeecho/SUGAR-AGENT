@@ -39,6 +39,8 @@ const TRAY_ICON = path.join(process.resourcesPath, 'tray.ico')
 const USER_DIR = app.getPath('userData')
 const LOG_DIR = path.join(USER_DIR, 'logs')
 const OPEN_UI_PROTOCOL = 'sugaragent-desktop'
+const ACTIVATION_PLUGIN_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/
+const ACTIVATION_SECTION = /^(?:general|models|skills|plugins|hooks|mcp|usage|security|schedules|env|paths|plugin:[a-z0-9][a-z0-9._-]{0,127}:[a-z0-9][a-z0-9._-]{0,127})$/
 
 const IS_WINDOWS = process.platform === 'win32'
 const IS_DEV = process.env.SUGARAGENT_DEV === '1'
@@ -382,7 +384,7 @@ function restartBackend(operation = null) {
       }
       const activation = pendingActivation
       pendingActivation = null
-      await loadApp(activation ? activation.session : '')
+      await loadApp(activation || '')
       if (quitting) return
       if (backend !== child) throw new Error('内置服务在加载界面时退出。')
       reloaded = true
@@ -557,14 +559,15 @@ function installNativeContextMenu(contents) {
   })
 }
 
-async function loadApp(session = '') {
+async function loadApp(activation = '') {
   if (!mainWindow) return
+  const value = typeof activation === 'string' ? { session: activation } : (activation || {})
   const configured = isConfigured()
-  const target = configured ? (session ? `/?session=${encodeURIComponent(session)}` : '/') : '/setup'
-  log(`加载界面 ${target}（configured=${configured}）`)
-  await mainWindow.loadURL(`${baseUrl()}${target}`)
+  const windowPath = configured ? activationPath(value) : '/setup'
+  log(`加载界面 ${windowPath}（configured=${configured}）`)
+  await mainWindow.loadURL(`${baseUrl()}${windowPath}`)
   mainWindow.setProgressBar(-1)
-  writeStatus({ backendState: 'ready', windowTarget: target, configured })
+  writeStatus({ backendState: 'ready', windowTarget: windowPath, configured })
 }
 
 /** 先绘制本地启动页，再进行路径探测、技能复制和后端启动。 */
@@ -660,6 +663,40 @@ function showWindow() {
 
 // -------------------------------------------------------- desktop activation ---
 
+/** Parse the optional plugin/settings destination carried by a toast click. */
+function parseActivationTarget(url) {
+  const plugin = url.searchParams.get('plugin') || ''
+  const page = url.searchParams.get('page') || ''
+  const section = url.searchParams.get('section') || ''
+  if (ACTIVATION_PLUGIN_ID.test(plugin)) {
+    const target = { kind: 'plugin', plugin_id: plugin }
+    if (ACTIVATION_PLUGIN_ID.test(page)) target.page_id = page
+    return target
+  }
+  if (ACTIVATION_SECTION.test(section)) return { kind: 'settings', section }
+  return null
+}
+
+function activationQuery(activation = {}) {
+  const parts = []
+  const add = (name, value) => parts.push(`${encodeURIComponent(name)}=${encodeURIComponent(value)}`)
+  const session = String(activation.session || '')
+  if (session) add('session', session)
+  const target = activation.target
+  if (target?.kind === 'plugin') {
+    add('open_plugin', target.plugin_id)
+    if (target.page_id) add('open_page', target.page_id)
+  } else if (target?.kind === 'settings') {
+    add('open_settings', target.section)
+  }
+  return parts.join('&')
+}
+
+function activationPath(activation = {}) {
+  const query = activationQuery(activation)
+  return query ? `/?${query}` : '/'
+}
+
 function parseDesktopActivation(argv) {
   for (const value of argv) {
     try {
@@ -667,7 +704,10 @@ function parseDesktopActivation(argv) {
       if (url.protocol !== `${OPEN_UI_PROTOCOL}:` || url.hostname !== 'open-ui'
           || (url.pathname && url.pathname !== '/')) continue
       const session = url.searchParams.get('session') || ''
-      return { session: /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(session) ? session : '' }
+      return {
+        session: /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(session) ? session : '',
+        target: parseActivationTarget(url),
+      }
     } catch {
       /* 非协议命令行参数 */
     }
@@ -686,9 +726,9 @@ function registerDesktopProtocol() {
 }
 
 /** 复用前端现有的会话激活机制，正常情况下无需重载页面。 */
-function requestSessionActivation(session) {
+function requestSessionActivation(session, target = null) {
   return new Promise(resolve => {
-    const body = JSON.stringify({ path: '/', session })
+    const body = JSON.stringify({ path: '/', session, ...(target ? { target } : {}) })
     const request = http.request({
       host: HOST, port: activePort, path: '/api/ui-activation', method: 'POST', timeout: 1500,
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
@@ -715,12 +755,13 @@ async function activateDesktop(activation) {
     if (mainWindow) showWindow()
     return
   }
+  activation = activation || { session: '' }
   showWindow()
-  if (!activation.session) return
+  if (!activation.session && !activation.target) return
   const url = new URL(mainWindow.webContents.getURL())
   if (url.pathname === '/setup') return
-  if (url.pathname === '/' && await requestSessionActivation(activation.session)) return
-  await mainWindow.loadURL(`${baseUrl()}/?session=${encodeURIComponent(activation.session)}`)
+  if (url.pathname === '/' && await requestSessionActivation(activation.session, activation.target)) return
+  await mainWindow.loadURL(`${baseUrl()}${activationPath(activation)}`)
 }
 
 function applyNativeTheme(event, theme) {
@@ -904,7 +945,7 @@ if (!gotLock) {
     }
     const initialActivation = pendingActivation
     pendingActivation = null
-    await loadApp(initialActivation ? initialActivation.session : '')
+    await loadApp(initialActivation || '')
     uiReady = true
     void reportDesktopWindowVisibility(mainWindow.isVisible())
     createTray()

@@ -395,6 +395,92 @@ function dockPluginPageBody(tab) {
     return dockRightPageHost.seat(tab, () => new DockPluginPage(tab, definition, binding));
 }
 
+let dockPluginUiReady = false;
+let dockActivationListeners = false;
+let dockPendingActivation = null;
+
+function dockEnsureActivationListeners() {
+    if (dockActivationListeners) return;
+    dockActivationListeners = true;
+    document.addEventListener('myagent:session-change', function () {
+        dockFlushActivationTarget();
+    });
+    document.addEventListener('myagent:plugin-ui-ready', function () {
+        dockPluginUiReady = true;
+        dockFlushActivationTarget();
+    });
+}
+
+/** Open the plugin page or settings tab carried by a notification click. */
+function applyUiActivationTarget(target, options = {}) {
+    if (!target || (target.kind !== 'plugin' && target.kind !== 'settings')) return false;
+    const sessionId = String(options.sessionId
+        || (typeof initialDeepLinkSession === 'string' ? initialDeepLinkSession : '')
+        || '');
+    let normalized;
+    if (target.kind === 'settings') {
+        normalized = { kind: 'settings', section: String(target.section || '') };
+        if (!normalized.section) return false;
+    } else {
+        normalized = {
+            kind: 'plugin',
+            plugin_id: String(target.plugin_id || ''),
+            page_id: String(target.page_id || ''),
+        };
+        if (!/^[a-z0-9][a-z0-9._-]{0,127}$/.test(normalized.plugin_id)) return false;
+        if (normalized.page_id && !/^[a-z0-9][a-z0-9._-]{0,127}$/.test(normalized.page_id)) return false;
+    }
+    dockEnsureActivationListeners();
+    dockPendingActivation = { target: normalized, sessionId };
+    const pending = dockPendingActivation;
+    setTimeout(function () {
+        // A click on a disabled/removed page must not leave a stale request
+        // that hijacks a later session switch.
+        if (dockPendingActivation === pending) dockPendingActivation = null;
+    }, 30000);
+    return dockFlushActivationTarget();
+}
+
+function dockFlushActivationTarget() {
+    const pending = dockPendingActivation;
+    if (!pending) return false;
+    if (pending.target.kind === 'plugin' && pending.sessionId && typeof currentSessionId === 'string'
+        && currentSessionId !== pending.sessionId) return false;
+    if (pending.target.kind === 'settings') {
+        if (typeof openSettingsCenter !== 'function') return false;
+        if (openSettingsCenter(pending.target.section, { preserveUnsaved: true }) === false) return false;
+        dockPendingActivation = null;
+        return true;
+    }
+    if (!dockPluginUiReady && !dockPluginPages.size) return false;
+    const opened = dockRightOpenPluginPage(pending.target.plugin_id, {
+        pageId: pending.target.page_id,
+        sessionId: pending.sessionId,
+    });
+    if (opened || dockPluginUiReady) dockPendingActivation = null;
+    return !!opened;
+}
+
+function dockConsumeActivationQuery() {
+    const deepLink = new URL(location.href);
+    const pluginId = deepLink.searchParams.get('open_plugin') || '';
+    const pageId = deepLink.searchParams.get('open_page') || '';
+    const section = deepLink.searchParams.get('open_settings') || '';
+    if (!pluginId && !section) return;
+    const target = section
+        ? { kind: 'settings', section }
+        : { kind: 'plugin', plugin_id: pluginId, page_id: pageId };
+    // Consume the parameters before opening: a manual reload must not replay a
+    // one-shot notification destination.
+    deepLink.searchParams.delete('open_plugin');
+    deepLink.searchParams.delete('open_page');
+    deepLink.searchParams.delete('open_settings');
+    try { history.replaceState(history.state, '', deepLink); } catch (error) { /* optional */ }
+    applyUiActivationTarget(target, {
+        sessionId: typeof initialDeepLinkSession === 'string' ? initialDeepLinkSession : '',
+    });
+}
+
 /** Main document owns navigation; settings and plugin frames use checked messages. */
 function dockInitPageNavigation() {
     document.addEventListener('click', event => {
@@ -413,17 +499,7 @@ function dockInitPageNavigation() {
             event.preventDefault(); dockRightOpenBrowser(url.href, { split: inDetails });
         }
     });
-    const deepLink = new URL(location.href);
-    const pluginId = deepLink.searchParams.get('open_plugin');
-    if (pluginId) {
-        const open = () => {
-            if (!dockPluginPages.size) return;
-            dockRightOpenPluginPage(pluginId);
-            deepLink.searchParams.delete('open_plugin');
-            history.replaceState(history.state, '', deepLink);
-            document.removeEventListener('myagent:plugin-ui-ready', open);
-        };
-        document.addEventListener('myagent:plugin-ui-ready', open);
-        open();
-    }
+    dockConsumeActivationQuery();
 }
+
+try { globalThis.MyAgentActivateTarget = applyUiActivationTarget; } catch (error) { /* ignore */ }

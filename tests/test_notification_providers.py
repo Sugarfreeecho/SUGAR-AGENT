@@ -49,3 +49,32 @@ def test_selecting_native_channel_does_not_send_to_other_providers():
     assert failures == [] and received == ["desktop"]
     assert asyncio.run(notification_providers.notify_user("Title", "Body", provider_ids=())) == []
     assert received == ["desktop"]
+
+
+def test_navigation_target_reaches_only_providers_that_accept_it():
+    received = []
+
+    def legacy(title, message):
+        received.append(("legacy", title, message))
+
+    def modern(title, message, session_id, target=None):
+        received.append(("modern", title, message, session_id, target))
+
+    def flexible(title, message, **kwargs):
+        received.append(("flexible", kwargs))
+
+    notification_providers.register_notification_provider("legacy", legacy)
+    notification_providers.register_notification_provider("modern", modern)
+    notification_providers.register_notification_provider("flexible", flexible)
+    target = {"kind": "plugin", "plugin_id": "demo", "page_id": "main"}
+
+    failures = asyncio.run(notification_providers.notify_user(
+        "SugarAgent", "Completed", "session-1", target=target,
+    ))
+
+    assert failures == []
+    assert received == [
+        ("legacy", "SugarAgent", "Completed"),
+        ("modern", "SugarAgent", "Completed", "session-1", target),
+        ("flexible", {"target": target}),
+    ]

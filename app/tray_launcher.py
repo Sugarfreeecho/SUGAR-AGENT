@@ -25,6 +25,7 @@ from python_runtime import configure_agent_python_environment, preferred_python
 from desktop_notify import show_desktop_notification
 from platform_lifecycle import request_webui_activation
 from proc_flags import NO_WINDOW, hidden_flags
+from ui_activation import target_from_query, target_query_params
 
 try:  # Optional capability: a packaging gap must never stop the tray itself.
     import tray_plugins
@@ -175,17 +176,28 @@ def _is_port_listening() -> bool:
         return False
 
 
-def _webui_browser_url(path: str, refresh: bool = False, session: str = "") -> str:
+def _webui_browser_url(
+    path: str, refresh: bool = False, session: str = "", target: dict | None = None,
+) -> str:
     parts = urlsplit(f"{BASE_URL}{path}")
     query = parts.query
     params = {}
     if session:
         params["session"] = session
+    params.update(target_query_params(target))
     if refresh:
         params["_"] = str(int(time.time()))
     if params:
         query += ("&" if query else "") + urlencode(params)
     return urlunsplit(parts._replace(query=query))
+
+
+def _activation_browser_path(session: str = "", target: dict | None = None) -> str:
+    params = {}
+    if session:
+        params["session"] = session
+    params.update(target_query_params(target))
+    return "/" + (f"?{urlencode(params)}" if params else "")
 
 
 def _open_url_in_browser(path: str = "/", refresh: bool = True) -> None:
@@ -196,18 +208,24 @@ def _open_url_in_browser(path: str = "/", refresh: bool = True) -> None:
         webbrowser.open(url, new=0, autoraise=True)
 
 
-def _request_existing_ui_activation(path: str = "/", session: str = "") -> bool:
+def _request_existing_ui_activation(
+    path: str = "/", session: str = "", target: dict | None = None,
+) -> bool:
     """Ask a live WebUI page to foreground itself instead of opening a duplicate."""
 
-    return request_webui_activation(
-        path,
-        base_url=BASE_URL,
-        session=session,
-        timeout=UI_ACTIVATION_TIMEOUT_SECONDS,
-    )
+    options = {
+        "base_url": BASE_URL,
+        "session": session,
+        "timeout": UI_ACTIVATION_TIMEOUT_SECONDS,
+    }
+    if target:
+        options["target"] = target
+    return request_webui_activation(path, **options)
 
 
-def _request_webui_activation_with_retry(path: str = "/", session: str = "") -> bool:
+def _request_webui_activation_with_retry(
+    path: str = "/", session: str = "", target: dict | None = None,
+) -> bool:
     """Try the activation heartbeat twice before trusting a negative answer.
 
     A transient hiccup (backend busy or just restarting) used to look
@@ -216,24 +234,38 @@ def _request_webui_activation_with_retry(path: str = "/", session: str = "") -> 
     """
 
     for attempt in range(2):
-        if _request_existing_ui_activation(path, session=session):
+        if target:
+            reused = _request_existing_ui_activation(path, session=session, target=target)
+        else:
+            reused = _request_existing_ui_activation(path, session=session)
+        if reused:
             return True
         if attempt == 0:
             time.sleep(0.15)
     return False
 
 
-def _session_from_protocol_uri(raw_uri: str) -> str:
-    """Extract ``session`` from a ``sugaragent://open-ui?session=...`` URI."""
+def _activation_from_protocol_uri(raw_uri: str) -> dict:
+    """Extract a session and optional plugin/settings target from a notify URI."""
     import re as _re
     from urllib.parse import parse_qs, urlparse
 
     try:
-        values = parse_qs(urlparse(str(raw_uri or "")).query).get("session") or []
+        query = urlparse(str(raw_uri or "")).query
+        values = parse_qs(query).get("session") or []
     except ValueError:
-        return ""
+        return {"session": "", "target": None}
     candidate = str(values[0] if values else "").strip()
-    return _re.sub(r"[^A-Za-z0-9\-]", "", candidate)[:64]
+    return {
+        "session": _re.sub(r"[^A-Za-z0-9\-]", "", candidate)[:64],
+        "target": target_from_query(query),
+    }
+
+
+def _session_from_protocol_uri(raw_uri: str) -> str:
+    """Backward-compatible session-only view of a notification URI."""
+
+    return _activation_from_protocol_uri(raw_uri)["session"]
 
 
 def _bring_window_to_foreground(hwnd: int) -> bool:
@@ -442,25 +474,27 @@ def _notify_existing_instance(open_browser: bool = True) -> bool:
         return False
 
 
-def _activate_webui_from_external(session: str = "") -> bool:
+def _activate_webui_from_external(session: str = "", target: dict | None = None) -> bool:
     """Reuse a live WebUI for notification/protocol activation when possible.
 
     ``session`` deep-links the activation: an already-open page navigates to
     that conversation (through the activation heartbeat channel); a fresh
-    browser window opens with ``/?session=...``.
+    browser window opens with ``/?session=...``.  ``target`` additionally
+    opens a plugin page or settings tab after the page becomes visible.
     """
 
     session = str(session or "").strip()
     # The resident launcher owns the strongest activation path: it signals the
     # browser page through the backend and then foregrounds the browser window.
-    # Its tray IPC cannot carry a session target, so session jumps bypass it.
-    if not session and _notify_existing_instance(open_browser=True):
+    # Its tray IPC cannot carry a session or plugin target, so targeted jumps
+    # bypass it.
+    if not session and not target and _notify_existing_instance(open_browser=True):
         return True
     # Direct backend launches may not have a tray process. Reuse the same page
     # heartbeat contract before falling back to the default browser handler.
     # Focus must verify success: a reused page inside an unfocusable host
     # (embedded automation browser) falls through to a real browser window.
-    _request_webui_activation_with_retry("/", session=session)
+    _request_webui_activation_with_retry("/", session=session, target=target)
     if _focus_existing_webui_tab():
         return True
     _append_log(
@@ -468,7 +502,7 @@ def _activate_webui_from_external(session: str = "") -> bool:
         f"opening a browser page (session={session or '-'})"
     )
     _open_url_in_browser(
-        f"/?session={session}" if session else "/",
+        _activation_browser_path(session, target),
         refresh=False,
     )
     return False
@@ -1051,18 +1085,20 @@ class TrayLauncher:
         with self._ui_open_lock:
             self._last_ui_open_at = None
 
-    def _open_url(self, path: str, refresh: bool = False, session: str = "") -> None:
+    def _open_url(
+        self, path: str, refresh: bool = False, session: str = "", target: dict | None = None,
+    ) -> None:
         if not self._is_listening():
             self._show_console()
             print(MSG_NOT_READY)
             return
         session = str(session or "").strip()
         if path == "/" and _focus_existing_webui_tab():
-            if session:
-                _request_webui_activation_with_retry(path, session=session)
+            if session or target:
+                _request_webui_activation_with_retry(path, session=session, target=target)
             return
         activation_reused = (
-            path == "/" and _request_webui_activation_with_retry(path, session=session)
+            path == "/" and _request_webui_activation_with_retry(path, session=session, target=target)
         )
         if activation_reused and _focus_existing_webui_tab():
             return
@@ -1073,7 +1109,7 @@ class TrayLauncher:
                 "WebUI heartbeat found but no keyword-matched, focusable browser tab; "
                 "opening a new browser page"
             )
-        url = _webui_browser_url(path, refresh, session)
+        url = _webui_browser_url(path, refresh, session, target)
         if not self._claim_ui_open_slot():
             _append_log(
                 "Duplicate UI open request ignored; the browser was launched a moment ago"
@@ -1309,8 +1345,9 @@ if __name__ == "__main__":
     args, _ = parser.parse_known_args()
     try:
         if args.activate_ui:
+            activation = _activation_from_protocol_uri(args.protocol_uri)
             _activate_webui_from_external(
-                session=_session_from_protocol_uri(args.protocol_uri)
+                session=activation["session"], target=activation["target"],
             )
             raise SystemExit(0)
         if args.daemon:

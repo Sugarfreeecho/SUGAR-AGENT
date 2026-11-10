@@ -245,7 +245,7 @@
 | `plugin` | 打开已启用插件的声明页面 |
 | `notice` | 顶部提示条，默认 8 秒，0 表示常驻 |
 | `settings` | 打开指定设置页签，但不保存任何修改 |
-| `notification` | 请求桌面通知，网页关闭也能发；返回 requested/unavailable/failed/unknown |
+| `notification` | 请求桌面通知，网页关闭也能发；可用 `plugin_id`/`page_id` 或 `section` 指定点击后的插件页/设置落点；返回 requested/unavailable/failed/unknown |
 
 - 不等待回答，调用后继续工作；需要用户选择时另起一次 `ask_user`。
 - 只展示值得看的内容，不要每个进度都发。

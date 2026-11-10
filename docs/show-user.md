@@ -15,7 +15,7 @@
 | `plugin` | 可选 `plugin_id`、`page_id` | 已启用插件声明的详情页/控制台；不传 ID 时打开插件目录 |
 | `notice` | `text`，可选 `level`、`duration_ms` | 顶部可关闭提示，最多 4,000 字符；默认显示 8 秒 |
 | `settings` | 可选 `section` | 打开指定设置页签，默认 `general`；保护未保存内容 |
-| `notification` | `text` | 原生系统通知，最多 2,000 字符；返回发送请求状态 |
+| `notification` | `text`，可选 `plugin_id`/`page_id` 或 `section` | 原生系统通知，最多 2,000 字符；点击可跳到插件页或设置分区；返回发送请求状态 |
 
 每次调用都需要 `title`，最多 100 字符。每次展示一个目标，可在后续调用中展示其他内容。重复打开同一展示会聚焦已有标签；插件页面保留现有挂载状态和未提交内容。
 
@@ -63,6 +63,18 @@
 {"kind":"notification","title":"报告已生成","text":"结果保存在 reports/result.html，可以回来查看。"}
 ```
 
+通知还可以带一个落点；点击系统通知时除了前置窗口，还会切换到来源会话并打开对应插件页面或设置页签：
+
+```json
+{"kind":"notification","title":"B站任务需要处理","text":"扫码登录已失效，请重新登录。","plugin_id":"sugar-bili-scroll","page_id":"main"}
+```
+
+```json
+{"kind":"notification","title":"Goal 待验收","text":"目标已完成，等待你确认。","section":"plugin:agent-goal:main"}
+```
+
+`plugin_id`/`page_id` 必须对应已启用插件声明的详情页；`section` 使用设置页签语法。二者只能选一种，目标不可用时整次展示失败，不会发送一条点不开的通知。点击后的落点会先经过后端按当前启用的插件目录重新校验，停用插件或已删除页面不会打开。
+
 系统通知只调用已注册的 `desktop-notifications` 提供者，不启用停用的插件，也不转发给其他通知渠道。工具仍返回 `display_requested`，并附带 `notification_status`：
 
 - `requested`：已向桌面通知通道发出请求，不代表系统实际显示或用户已阅读。
@@ -88,6 +100,7 @@
 
 ## 验证记录
 
+- 2026-11-09：`kind=notification` 增加插件页/设置分区落点；目标经插件目录校验后随 Windows toast、Electron 通知、托盘激活和 `/api/ui-activation` 传递，点击打开对应详情页/设置页。后端目标与通知 Provider 回归、桌面通知 JS 与 PowerShell 协议回归通过。
 - 2026-10-27 移除文件目录限制后，工具及浏览器目标检查共 71 项通过，覆盖目录外绝对路径和上级相对路径、无需文件读取审批、文件自身目录上下文、外部 HTML 相邻样式及源码切换，以及原有展示目标、通知状态和历史静默。
 - 相关 Python/浏览器回归共 207 项通过、1 项跳过，包含展示工具、安全策略、会话工作目录、详情栏导航及会话切换；4 项 Node 运行检查通过。
 - 前端生产构建、产物与源码一致性检查通过；现有大包体积提示仍存在。

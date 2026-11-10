@@ -19,8 +19,10 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 try:  # 生产环境按扁平模块导入（app/ 在 sys.path 上）
     from proc_flags import hidden_flags
+    from ui_activation import target_env
 except ImportError:  # 以 app.* 包路径导入时（测试 / 工具脚本）
     from app.proc_flags import hidden_flags
+    from app.ui_activation import target_env
 
 
 logger = logging.getLogger(__name__)
@@ -52,17 +54,25 @@ def show_desktop_notification(
     title: str = NOTIFY_TITLE,
     message: str = NOTIFY_MESSAGE,
     session_id: str = "",
+    target: dict | None = None,
 ) -> None:
-    """Show a native desktop notification with the given title and message."""
+    """Show a native desktop notification with the given title and message.
 
-    if os.getenv("SUGARAGENT_DESKTOP") == "1" and _notify_electron(title, message, session_id):
+    ``target`` is an optional validated plugin page or settings tab that a
+    toast click should open in addition to focusing the app.
+    """
+
+    if os.getenv("SUGARAGENT_DESKTOP") == "1" and _with_target(
+            _notify_electron, (title, message, session_id), target):
         return
     system = platform.system()
     if system == "Windows":
-        if _notify_windows_toast(title, message, session_id):
+        if _with_target(_notify_windows_toast, (title, message, session_id), target):
             return
         _notify_windows_message_box(title, message)
     elif system == "Darwin":
+        # osascript notifications cannot carry a click action; the session is
+        # still the best fallback there.
         _notify_macos(title, message)
     elif system == "Linux":
         _notify_linux(title, message)
@@ -70,7 +80,15 @@ def show_desktop_notification(
         logger.info("Desktop notification is not supported on %s", system)
 
 
-def _notify_electron(title: str, message: str, session_id: str = "") -> bool:
+def _with_target(callback, args: tuple, target: dict | None):
+    """Keep legacy three-argument helpers working when no target is requested."""
+
+    return callback(*args, target=target) if target else callback(*args)
+
+
+def _notify_electron(
+    title: str, message: str, session_id: str = "", target: dict | None = None,
+) -> bool:
     """Ask the owning desktop process to deliver and acknowledge a native toast."""
 
     port = os.getenv("SUGARAGENT_NOTIFY_PORT", "")
@@ -83,6 +101,7 @@ def _notify_electron(title: str, message: str, session_id: str = "") -> bool:
             return False
         body = json.dumps({
             "title": title, "message": message, "session_id": str(session_id or ""),
+            **({"target": target} if target else {}),
         }, ensure_ascii=False).encode("utf-8")
         request = Request(
             f"http://127.0.0.1:{port_number}/notify", data=body,
@@ -97,7 +116,9 @@ def _notify_electron(title: str, message: str, session_id: str = "") -> bool:
         return False
 
 
-def _notify_windows_toast(title: str, message: str, session_id: str = "") -> bool:
+def _notify_windows_toast(
+    title: str, message: str, session_id: str = "", target: dict | None = None,
+) -> bool:
     """Show a system toast in the Windows notification center.
 
     The actual toast is rendered by app/notify_ui_closed.ps1 so it works even
@@ -110,6 +131,9 @@ def _notify_windows_toast(title: str, message: str, session_id: str = "") -> boo
     env = os.environ.copy()
     env["SUGARAGENT_NOTIFY_TITLE"] = title
     env["SUGARAGENT_NOTIFY_MESSAGE"] = message
+    for name in ("SUGARAGENT_NOTIFY_PLUGIN", "SUGARAGENT_NOTIFY_PAGE", "SUGARAGENT_NOTIFY_SECTION"):
+        env.pop(name, None)
+    env.update(target_env(target))
     if str(session_id or "").strip():
         env["SUGARAGENT_NOTIFY_SESSION"] = str(session_id).strip()
     else:

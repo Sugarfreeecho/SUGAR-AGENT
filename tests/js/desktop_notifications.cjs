@@ -46,6 +46,14 @@ test('backend request delivers a native toast without a renderer and preserves s
   assert.ok(calls.logs.includes('桌面通知已发送'))
 })
 
+test('plugin page target is carried by the toast protocol activation', async t => {
+  const { calls, post } = await harness(t)
+  const target = { kind: 'plugin', plugin_id: 'demo', page_id: 'console' }
+  assert.equal(await post({ title: 'SugarAgent', message: 'Completed', session_id: 'session-1', target }), 200)
+  assert.match(calls.notifications[0].options.toastXml,
+    /launch="sugaragent-desktop:\/\/open-ui\?session=session-1&amp;plugin=demo&amp;page=console"/)
+})
+
 test('unauthenticated, oversized, and malformed requests cannot emit native notifications', async t => {
   const { calls, post } = await harness(t)
   const payload = { title: 'SugarAgent', message: 'Completed' }
@@ -54,6 +62,7 @@ test('unauthenticated, oversized, and malformed requests cannot emit native noti
   assert.equal(await post('{'), 400)
   assert.equal(await post({ ...payload, title: null }), 400)
   assert.equal(await post({ ...payload, session_id: {} }), 400)
+  assert.equal(await post({ ...payload, target: [] }), 400)
   assert.equal(await post({ ...payload, message: 'x'.repeat(17000) }), 413)
   assert.equal(calls.notifications.length, 0)
 })
@@ -74,11 +83,13 @@ test('notification timeout reports failure and dismisses the pending toast', asy
 
 test('invalid session ids cannot inject toast XML; non-Windows clicks activate the desktop', async t => {
   const windows = await harness(t)
-  await windows.post({ title: 'SugarAgent', message: 'Completed', session_id: 'bad" />' })
+  await windows.post({ title: 'SugarAgent', message: 'Completed', session_id: 'bad" />',
+    target: { kind: 'plugin', plugin_id: 'bad" />' } })
   assert.match(windows.calls.notifications[0].options.toastXml, /launch="sugaragent-desktop:\/\/open-ui"/)
   const other = await harness(t, { platform: 'linux' })
-  await other.post({ title: 'SugarAgent', message: 'Completed', session_id: 'session-2' })
+  const target = { kind: 'settings', section: 'plugin:demo:accounts' }
+  await other.post({ title: 'SugarAgent', message: 'Completed', session_id: 'session-2', target })
   assert.equal(other.calls.notifications[0].options.toastXml, undefined)
   other.calls.notifications[0].emit('click', {})
-  assert.deepEqual(other.calls.activations, [{ session: 'session-2' }])
+  assert.deepEqual(other.calls.activations, [{ session: 'session-2', target }])
 })

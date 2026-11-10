@@ -1644,7 +1644,16 @@ function updateSidebarRuntimeStatus(nextStatus) {
 
 var runtimeStatusHeartbeatPending = false;
 var runtimeTakeoverBySession = Object.create(null);
-var lastUiActivationSeq = 0;
+var lastUiActivationSeq = (function () {
+    // A reload in the same tab must not replay a notification target that was
+    // already consumed. A newly opened tab still picks up the latest request.
+    try { return Number(sessionStorage.getItem('myagent-ui-activation-seq')) || 0; } catch (e) { return 0; }
+})();
+function rememberUiActivationSeq(seq) {
+    lastUiActivationSeq = Number(seq) || 0;
+    try { sessionStorage.setItem('myagent-ui-activation-seq', String(lastUiActivationSeq)); } catch (e) { /* optional cache */ }
+}
+var initialDeepLinkSession = '';
 var pendingQuerySession = (function () {
     // Deep link support: /?session=<id> selects that conversation once the
     // session list is ready, then the parameter is stripped so a manual
@@ -1653,6 +1662,7 @@ var pendingQuerySession = (function () {
         var params = new URLSearchParams(window.location.search || '');
         var sid = String(params.get('session') || '').trim();
         if (sid && /^[A-Za-z0-9][A-Za-z0-9\-]{0,63}$/.test(sid)) {
+            initialDeepLinkSession = sid;
             params.delete('session');
             var nextSearch = params.toString();
             try {
@@ -1772,13 +1782,29 @@ async function refreshRuntimeStatus() {
         updateSidebarRuntimeStatus(payload && payload.status ? payload.status : true);
         maybeTakeOverActiveRuntimeSession(payload);
         var activationSeq = Number(payload && payload.activation_seq) || 0;
+        // A backend restart resets the counter; keep the local cursor from
+        // suppressing the first activation of the new process.
+        if (activationSeq < lastUiActivationSeq) rememberUiActivationSeq(0);
         if (activationSeq > lastUiActivationSeq) {
-            lastUiActivationSeq = activationSeq;
+            rememberUiActivationSeq(activationSeq);
             try { window.focus(); } catch (e) { /* browser policy may reject focus */ }
             var activationSession = String((payload && payload.activation_session) || '').trim();
+            var activationTarget = payload && payload.activation_target;
+            var activationDone = Promise.resolve();
             if (activationSession && activationSession !== currentSessionId
                     && typeof switchSession === 'function') {
-                void Promise.resolve(switchSession(activationSession)).catch(function (err) { /* session may be gone */ });
+                activationDone = Promise.resolve(switchSession(activationSession)).catch(function (err) {
+                    /* session may be gone; do not open its plugin page in another chat */
+                    return false;
+                });
+            }
+            if (activationTarget && typeof applyUiActivationTarget === 'function') {
+                void activationDone.then(function (switched) {
+                    if (switched === false) return;
+                    applyUiActivationTarget(activationTarget, {
+                        sessionId: activationSession || currentSessionId,
+                    });
+                }).catch(function (err) { /* activation target is best effort */ });
             }
         }
     } catch (error) {

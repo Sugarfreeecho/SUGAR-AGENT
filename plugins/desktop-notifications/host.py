@@ -3,12 +3,15 @@
 import asyncio
 
 
-async def _notify(*args):
+async def _notify(title, message, session_id="", target=None):
     from desktop_notify import show_desktop_notification
 
     # Native notification helpers wait for delivery. Keep the ASGI event loop
     # available for focus updates, streaming, and other session completions.
-    await asyncio.to_thread(show_desktop_notification, *args)
+    if target:
+        await asyncio.to_thread(show_desktop_notification, title, message, session_id, target)
+    else:
+        await asyncio.to_thread(show_desktop_notification, title, message, session_id)
 
 
 def _register(plugin):

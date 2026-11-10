@@ -64,6 +64,7 @@ def request_webui_activation(
     base_url: str = BASE_URL,
     timeout: float = 0.8,
     session: str = "",
+    target: dict | None = None,
 ) -> bool:
     """Ask a live main WebUI page to activate itself."""
 
@@ -71,6 +72,8 @@ def request_webui_activation(
     payload: dict[str, Any] = {"path": suffix}
     if str(session or "").strip():
         payload["session"] = str(session).strip()
+    if isinstance(target, dict) and target:
+        payload["target"] = target
     data = json.dumps(payload).encode("utf-8")
     request = urllib_request.Request(
         f"{str(base_url).rstrip('/')}/api/ui-activation",

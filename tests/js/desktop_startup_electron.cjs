@@ -9,7 +9,7 @@ const path = require('node:path')
 const vm = require('node:vm')
 const root = path.resolve(__dirname, '../..')
 const source = fs.readFileSync(path.join(root, 'packaging/electron/main.js'), 'utf8')
-const methods = ['createWindow', 'showStartup', 'loadApp'].map(name =>
+const methods = ['createWindow', 'showStartup', 'activationQuery', 'activationPath', 'loadApp'].map(name =>
   source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?^}`, 'm'))[0]).join('\n')
 const progress = []
 const cursors = []

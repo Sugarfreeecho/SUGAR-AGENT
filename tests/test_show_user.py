@@ -166,9 +166,12 @@ def test_external_viewer_reads_text_media_html_and_sibling_assets_without_a_work
 
 
 def test_plugin_page_requires_an_enabled_declared_destination(show_context, monkeypatch):
-    import user_presentations
+    import agent_extensions
+
     context, _, _, events, _ = show_context
-    monkeypatch.setattr(user_presentations, "_plugin_pages", lambda: [{"plugin_id": "demo", "id": "console"}])
+    monkeypatch.setattr(agent_extensions, "plugin_catalog_snapshot", lambda: {"ui_contributions": [
+        {"slot": "details.tab", "plugin_id": "demo", "id": "console", "target": "plugin-page"},
+    ]})
     assert asyncio.run(invoke_show_user(context, {"kind": "plugin", "title": "控制台", "plugin_id": "demo"})).kind is ToolOutcomeKind.COMPLETED
     assert events[0]["presentation"]["page_id"] == "console"
     result = asyncio.run(invoke_show_user(context, {"kind": "plugin", "title": "已停用", "plugin_id": "disabled"}))
@@ -341,3 +344,72 @@ def test_failed_initial_commit_prevents_native_notification(show_context, native
     result = asyncio.run(invoke_show_user(context, NOTIFICATION))
     assert result.kind is ToolOutcomeKind.FAILED
     assert not native_provider
+
+
+def test_notification_can_target_a_declared_plugin_page(show_context, monkeypatch):
+    import agent_extensions
+    import notification_providers
+
+    context, manager, _, _, _ = show_context
+    monkeypatch.setattr(agent_extensions, "plugin_catalog_snapshot", lambda: {"ui_contributions": [
+        {"slot": "details.tab", "plugin_id": "demo", "id": "console", "target": "plugin-page"},
+    ]})
+    received = []
+
+    async def native(title, message, session_id, target=None):
+        received.append((title, message, session_id, target))
+
+    monkeypatch.setattr(notification_providers, "_providers", {"desktop-notifications": native})
+    result = asyncio.run(invoke_show_user(context, {
+        **NOTIFICATION, "plugin_id": "demo", "page_id": "console",
+    }))
+
+    payload = json.loads(result.content)
+    target = {"kind": "plugin", "plugin_id": "demo", "page_id": "console"}
+    assert payload["notification_status"] == "requested"
+    assert received == [(NOTIFICATION["title"], NOTIFICATION["text"], "s1", target)]
+    assert saved_presentation(manager, "s1", payload["presentation_id"])["activation_target"] == target
+
+
+def test_notification_rejects_an_unavailable_plugin_target(show_context, monkeypatch):
+    import agent_extensions
+    import notification_providers
+
+    context, _, _, _, workspace = show_context
+    monkeypatch.setattr(agent_extensions, "plugin_catalog_snapshot", lambda: {"ui_contributions": []})
+    received = []
+    monkeypatch.setattr(notification_providers, "_providers", {
+        "desktop-notifications": lambda *args, **kwargs: received.append(args),
+    })
+    result = asyncio.run(invoke_show_user(context, {
+        **NOTIFICATION, "plugin_id": "missing",
+    }))
+
+    assert result.kind is ToolOutcomeKind.FAILED
+    assert result.message == "plugin page is unavailable; use kind=plugin without plugin_id to open the available plugin catalogue"
+    assert received == []
+    assert not list(workspace.iterdir())
+
+
+def test_notification_can_target_a_plugin_settings_section(show_context, monkeypatch):
+    import agent_extensions
+    import notification_providers
+
+    context, manager, _, _, _ = show_context
+    monkeypatch.setattr(agent_extensions, "plugin_catalog_snapshot", lambda: {"ui_contributions": [
+        {"slot": "settings.section", "plugin_id": "demo", "id": "accounts"},
+    ]})
+    received = []
+
+    async def native(title, message, session_id, target=None):
+        received.append(target)
+
+    monkeypatch.setattr(notification_providers, "_providers", {"desktop-notifications": native})
+    result = asyncio.run(invoke_show_user(context, {
+        **NOTIFICATION, "section": "plugin:demo:accounts",
+    }))
+
+    payload = json.loads(result.content)
+    target = {"kind": "settings", "section": "plugin:demo:accounts"}
+    assert received == [target]
+    assert saved_presentation(manager, "s1", payload["presentation_id"])["activation_target"] == target

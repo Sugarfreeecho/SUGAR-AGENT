@@ -1,6 +1,6 @@
 # 通知、存在性与恢复 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-10-14 v7（覆盖至：当前工作区；桌面窗口隐藏状态与通知启动器静默转交）
+- 版本：2026-11-09 v8（覆盖至：当前工作区；通知落点、桌面窗口隐藏状态与通知启动器静默转交）
 - 用途：逐条审查（四字段格式）。
 - 适用实现：`app/tray_launcher.py`、`app/platform_lifecycle.py`、`app/webui.py`（ui-presence / ui-activation / ui-desktop-window / 通知段）、`modules/message-rendering.js`、`modules/session-management.js`、恢复 runner（`start_react_recovery_runner`）、桌面壳（`packaging/electron/main.js`、`packaging/electron/desktop-shortcuts.js`、`packaging/native/StartupLauncher.cs`）。
 - 上级：`00-WebUI对话界面整体设计.md`
@@ -64,6 +64,12 @@
 - **规则与边界**：协议判定仅限 `sugaragent-desktop://open-ui` 且 host/path 合法；转交经 `CreateProcess`，`--launcher-report` 记录 `nativeSplashShown=false / protocolForwarded=true`；快捷方式判定要求绝对路径且目标落在本安装目录（大小写不敏感）；`afterPack` 先品牌化运行时再编译启动器（钩子等待完成）。
 - **依据**：`packaging/native/StartupLauncher.cs::ForwardProtocol`、`packaging/electron/desktop-shortcuts.js`、`packaging/scripts/startup-launcher.cjs::brandRuntimeExe`、`packaging/nsis/installer.nsh`；回归 `tests/test_startup_launcher.py`、`tests/js/desktop_shortcuts.cjs`、`tests/native/startup_probe.cs`。
 
+### UC-5G10 通知落点（插件页 / 设置分区）
+- **触发**：插件或 Agent 发出的系统通知需要用户回到某个插件页面或设置页签（例如扫码失效、Goal 待验收、插件配置待补全）；点击系统通知。
+- **预期现象**：点击 toast 后不仅前置窗口，还切换到通知所属会话并打开对应插件详情页或设置分区；已在打开页面的浏览器由心跳激活，未打开页面由 `/?session=…&open_plugin=…&open_page=…` / `open_settings=…` 深链在启动后落位；插件页面保留已有挂载状态。
+- **规则与边界**：通知目标只允许 `{kind:"plugin",plugin_id,page_id}` 或 `{kind:"settings",section}`；后端按当前启用插件目录重新校验，托盘/桌面壳只做形状与字符校验，前端再次校验并只打开已同步的声明页面。目标随 `session` 一起进入 `/api/ui-activation` 与 `/api/runtime-status`；页面用 `sessionStorage` 记住已消费的激活序号，刷新不重复打开，后端重启序号归零后重新接受首个激活。点击前不校验、不自动点击授权，也不把任意 URL 当作目标。Windows toast 走 `sugaragent[-desktop]://open-ui?...`，非 Windows 走 Electron Notification 点击回调。
+- **依据**：`app/ui_activation.py`、`app/user_presentations.py`、`app/notification_providers.py`、`app/desktop_notify.py`、`app/notify_ui_closed.ps1`、`app/webui.py::request_ui_activation/_runtime_status_payload`、`app/tray_launcher.py`、`packaging/electron/notifications.js`、`packaging/electron/main.js`、`page-host.js::applyUiActivationTarget`、`session-management.js::refreshRuntimeStatus`；回归 `tests/test_ui_activation.py`、`tests/test_show_user.py`、`tests/test_notification_providers.py`、`tests/test_desktop_notify.py`、`tests/test_desktop_shell.py`、`tests/test_tray_launcher.py`、`tests/js/desktop_notifications.cjs`、`tests/js/desktop_shell_runtime.cjs`。
+
 ## 3. 边界
 
 - 通知与流观察者重连（UC-5C3）独立：前者管"提醒"，后者管"数据"。
@@ -87,6 +93,7 @@
 
 ## 5. 版本记录
 
+- 2026-11-09 v8：新增 UC-5G10——系统通知可携带插件页/设置分区落点，打通 `show_user(kind=notification)`、通知 provider、Windows toast 协议、Electron 通知、托盘激活、`/api/ui-activation` 与前端详情栏；目标按启用插件目录校验，刷新不重复消费。
 - 2026-10-14 v7：新增 UC-5G8（桌面窗口隐藏与后台提示——主进程 token 上报、隐藏视同无打开页面、显示取消待发、通知优先级；5 例后端回归 + close-to-tray 外壳回归）与 UC-5G9（通知启动器静默转交、旧 `Electron.lnk` 清理、双 exe 品牌与稳定 AppUserModelId）；UC-5G2 补记 `desktop` 标记与“驻留渲染器不算打开页面”。
 - 2026-09-21 v6：恢复浏览器窗口及后台标签的 `General Agent` / `SugarAgent` 关键词匹配；仅保留浏览器进程过滤，不再逐标签核对地址。
 - 2026-09-21 v5：撤销逐标签选中与地址核验扫描；浏览器地址检查改为只读当前标签，避免高频切换和唤醒其它页面。后台标签不再强求复用。

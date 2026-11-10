@@ -4629,15 +4629,16 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     _openai_function_schema(
         "show_user",
         "Show reviewable content in the details sidebar (webpage/text/image/file/plugin), a top notice, a "
-        "settings tab, or a system notification, without waiting for an answer. Use it for output worth "
-        "seeing, not every progress update; success does not mean the user saw it or logged in. Kind "
-        "limits: sugar-agent-manual -> references/03-tools.md.",
+        "settings tab, or a system notification (optionally targeting a plugin page or settings tab on "
+        "click), without waiting for an answer. Use it for output worth seeing, not every progress update; "
+        "success does not mean the user saw it or logged in. Kind limits: sugar-agent-manual -> "
+        "references/03-tools.md.",
         {
             "kind": {"type": "string", "enum": ["webpage", "text", "image", "file", "plugin", "notice", "settings", "notification"]},
             "title": {"type": "string", "maxLength": 100, "description": "Short user-facing title explaining what is being shown."},
             "url": {"type": "string", "description": "For webpage: absolute HTTP(S) URL, including local development services. Never include URL credentials."},
             "text": {"type": "string", "maxLength": 65536, "description": "Content for text, notice (max 4000 chars), or notification (max 2000 chars)."},
-            "section": {"type": "string", "description": "For settings: general, models, skills, plugins, hooks, mcp, usage, security, schedules, env, paths, or an available plugin:<plugin_id>:<section_id>. Default general. Opens the tab without changing configuration."},
+            "section": {"type": "string", "description": "For settings: general, models, skills, plugins, hooks, mcp, usage, security, schedules, env, paths, or an available plugin:<plugin_id>:<section_id>. Default general. For notification: optional settings tab opened when the user clicks the system notification. Opens the tab without changing configuration."},
             "level": {"type": "string", "enum": ["info", "success", "warning", "error"], "description": "For notice: visual level, default info."},
             "duration_ms": {"type": "integer", "minimum": 0, "maximum": 30000, "description": "For notice: 1000–30000 milliseconds, default 8000; 0 keeps it visible until dismissed."},
             "format": {"type": "string", "enum": ["text", "markdown"], "description": "For text: default text. Markdown is rendered without executable HTML or remote image loading."},
@@ -4646,8 +4647,8 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "data_url": {"type": "string", "description": "For image: alternative PNG/JPEG/WebP/GIF base64 data URL actually returned by a tool; at most 2 MiB. Exactly one image source."},
             "alt": {"type": "string", "maxLength": 200, "description": "Required accessible description for image."},
             "caption": {"type": "string", "maxLength": 500, "description": "Optional plain-text image caption."},
-            "plugin_id": {"type": "string", "description": "For plugin: enabled plugin ID; omit to open the plugin catalogue."},
-            "page_id": {"type": "string", "description": "Optional declared plugin page ID; omit to open its first available page."},
+            "plugin_id": {"type": "string", "description": "For plugin: enabled plugin ID; omit to open the plugin catalogue. For notification: optional plugin page opened on notification click."},
+            "page_id": {"type": "string", "description": "Optional declared plugin page ID; omit to open its first available page. For notification: used with plugin_id."},
         },
         ["kind", "title"],
     ),

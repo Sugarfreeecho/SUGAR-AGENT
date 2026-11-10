@@ -5,6 +5,7 @@
 - 路由：无。前端入口：无（通知由宿主在会话完成 / 需要关注时触发）。
 - 注册：`install()` 与 `start()` 各注册一次（宿主的 lifespan 可能在同一解释器里重启），`stop()` 注销，全部带 `replace=True`，重复注册安全。
 - 开关：`MYAGENT_UI_CLOSED_NOTIFY=0` 可关闭网页关闭时的通知（测试进程默认关闭）。
+- 落点：`notify_user(title, message, session_id, target={...})` 可选携带目标；点击通知时宿主会前置窗口、切换会话并打开插件页或设置分区。目标格式为 `{"kind":"plugin","plugin_id":"...","page_id":"..."}` 或 `{"kind":"settings","section":"plugin:<id>:<section>"}`，后端按当前启用插件目录重新校验；旧的三参数 provider 不受影响（`target` 会被忽略）。
 
 ## 热重载
 

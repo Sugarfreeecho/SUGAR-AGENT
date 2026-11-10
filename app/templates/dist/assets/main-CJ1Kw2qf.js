@@ -378,7 +378,6 @@ const UI_TRANSLATIONS_EN = {
     '如需帮助或反馈，请联系GitHub @sugarfreeecho': 'For help or feedback, contact @sugarfreeecho on GitHub.',
     '运行诊断': 'Diagnostics',
     '更多操作': 'More actions', '更多': 'More', '删除': 'Delete', '置顶': 'Pin', '取消置顶': 'Unpin',
-    '收藏会话': 'Add to favorites', '取消收藏': 'Remove from favorites', '已收藏': 'Favorited', '收藏夹': 'Favorites',
     '归档': 'Archive', '取消归档': 'Unarchive', '删除会话': 'Delete session', '此操作不可恢复': 'This action cannot be undone',
     '未命名': 'Untitled', '重新加载': 'Reload', '加载中...': 'Loading...', '加载中…': 'Loading…',
     '生成中': 'Generating', '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view',
@@ -448,7 +447,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
 });
 Object.assign(UI_TRANSLATIONS_EN, {
     // Session navigation and lifecycle
-    '置顶目录': 'Pinned', '收藏夹': 'Favorites', '归档目录': 'Archived', '刷新归档目录': 'Refresh archived sessions',
+    '置顶目录': 'Pinned', '归档目录': 'Archived', '刷新归档目录': 'Refresh archived sessions',
     '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '今天': 'Today', '昨天': 'Yesterday', '近7天': 'Last 7 days',
     '近三天': 'Last 3 days', '近半月': 'Last 15 days', '近一月': 'Last 30 days',
     '近14天': 'Last 14 days', '加载会话': 'Load session', '加载会话列表失败': 'Failed to load sessions',
@@ -624,7 +623,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '任务失败，点击查看': 'Task failed — click to view', '有新回复，点击查看': 'New response — click to view',
     'Agent 请求执行操作': 'Agent requests permission to perform an action', '请选择操作': 'Choose an action', '复制文本': 'Copy text', '保存图片': 'Save image', '执行': 'Run',
     '原因：': 'Reason: ', '找不到可保存的 Final 卡片': 'No Final card is available to save', '操作失败': 'Operation failed', '确认': 'Confirm',
-    '加载会话状态快照失败，回退至旧接口': 'Failed to load the session state snapshot; falling back to the legacy endpoint', '收藏失败': 'Failed to favorite', '归档失败': 'Archive failed', '置顶失败': 'Pin failed', '待办设置失败': 'Failed to update todo status', '重命名失败': 'Rename failed',
+    '加载会话状态快照失败，回退至旧接口': 'Failed to load the session state snapshot; falling back to the legacy endpoint', '归档失败': 'Archive failed', '置顶失败': 'Pin failed', '待办设置失败': 'Failed to update todo status', '重命名失败': 'Rename failed',
     '加载更早记录': 'Load earlier records', '加载更早消息': 'Load earlier messages', '保存失败：': 'Save failed: ',
     '置顶会话': 'Pin session', '设为待办': 'Mark as todo', '取消待办': 'Remove todo', '待办': 'Todo', '待审核': 'Pending review', '归档会话': 'Archive session', '重命名': 'Rename', '重命名会话': 'Rename session',
     '编辑会话名称': 'Edit the session name', '会话名称': 'Session name', '保存名称': 'Save name',
@@ -913,7 +912,6 @@ function translateUiString(value) {
         .replace(/^加载更早(?:消息|记录)失败：?(.+)$/g, 'Failed to load earlier messages: $1')
         .replace(/^预加载下一批归档目录失败：?(.+)$/g, 'Failed to preload the next archived sessions: $1')
         .replace(/^重命名失败：?(.+)$/g, 'Rename failed: $1')
-        .replace(/^收藏失败：?(.+)$/g, 'Failed to favorite: $1')
         .replace(/^归档失败：?(.+)$/g, 'Archive failed: $1')
         .replace(/^置顶失败：?(.+)$/g, 'Pin failed: $1')
         .replace(/^问题 (\\d+)$/g, 'Question $1')
@@ -3963,17 +3961,10 @@ function selectSessionsMatchingSearch(list) {
 
 function selectSessionSections() {
     const normalList = [];
-    const favoriteList = [];
     const allSessions = selectAllSessions();
     for (let i = 0; i < allSessions.length; i += 1) {
         const s = allSessions[i];
         if (!s || !s.id || !!s.archived) continue;
-        // 收藏夹是一级目录（与会话 / 归档目录同级）：收藏的会话只出现在收藏夹，
-        // 不再重复落进时间 / 工作目录分组；取消收藏后回到常规会话列表。
-        if (s.favorite) {
-            favoriteList.push(s);
-            continue;
-        }
         // 置顶不再单独成区：置顶会话留在它自己的时间 / 工作目录分组里。
         // 服务端排序本来就是"置顶优先"，所以它们在各自组内自然排在最前
         // —— 即"工作目录模式下没有专门的置顶目录，只在每个项目内置顶"。
@@ -3983,14 +3974,12 @@ function selectSessionSections() {
     return {
         // 兼容旧调用方：置顶区已取消（渲染层不会再单独成区）。
         pinned: [],
-        favorites: selectSessionsMatchingSearch(favoriteList),
         normal: selectSessionsMatchingSearch(normalList),
         normalGroups: selectNormalSessionGroups(selectSessionsMatchingSearch(normalList)),
         archived: archiveFilter === 'hide' ? [] : selectSessionsMatchingSearch(selectArchivedSessions()),
         // 'only' 时只渲染归档区段；'hide' 连归档区段入口一起隐藏。
         archiveFilter: archiveFilter,
         showPinnedSection: false,
-        showFavoritesSection: archiveFilter !== 'only',
         showNormalSection: archiveFilter !== 'only',
         showArchivedSection: archiveFilter !== 'hide',
     };
@@ -4267,7 +4256,7 @@ function abortSessionRun(sessionId, reason, opts) {
         sessionsList.appendChild(sec);
 
         // 「会话目录」的标题与三个图标在侧栏静态头（session-list-head）里，不再进滚动列表；
-        // 收藏夹 / 归档仍保留列表内的折叠头。
+        // 置顶 / 归档仍保留列表内的折叠头。
         if (!options.headless) {
             var toggle = document.createElement('button');
             toggle.type = 'button';
@@ -4296,8 +4285,6 @@ function abortSessionRun(sessionId, reason, opts) {
     if (sections.showNormalSection !== false) {
         appendSection('normal', '会话目录', sections.normal, { headless: true });
     }
-    // 收藏夹是一级目录：与「会话目录」「归档目录」同级，放在两者之间。
-    if (sections.showFavoritesSection !== false) appendSection('favorites', '收藏夹', sections.favorites);
     if (sections.showArchivedSection !== false) appendSection('archived', '归档目录', sections.archived);
     if (searching && !sessionsList.children.length) {
         var empty = document.createElement('div');
@@ -7424,759 +7411,759 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false, messageRecord: messageRecord };
 }
-`,Ts=`let modelProfilesCache = null;\r
-let modelProfilesLoadedAt = 0;\r
-let modelProfilesLoadPromise = null;\r
-const MODEL_PROFILES_CACHE_TTL_MS = 30000;\r
-const modelProfilesRefreshPromises = Object.create(null);\r
-const modelProfileBusyBySession = Object.create(null);\r
-const modelProfileIdBySession = Object.create(null);\r
-const modelProfileToggleBusy = Object.create(null);\r
-let modelProfileSelectionEpoch = 0;\r
-let activeModelProfileId = '';\r
-const LS_NEW_SESSION_MODEL_PROFILE = 'myagent-new-session-model-profile';\r
-const LS_NEW_SESSION_REASONING_EFFORT = 'myagent-new-session-reasoning-effort';\r
-const MODEL_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];\r
-const modelReasoningEffortBySession = Object.create(null);\r
-const modelReasoningEffortBusy = Object.create(null);\r
-let modelMenuPane = 'root';\r
-\r
-function newSessionReasoningEffort() {\r
-    try {\r
-        const effort = localStorage.getItem(LS_NEW_SESSION_REASONING_EFFORT) || '';\r
-        return MODEL_REASONING_EFFORTS.includes(effort) ? effort : '';\r
-    }\r
-    catch (e) { return ''; }\r
-}\r
-\r
-function commitNewSessionReasoningEffort(sessionId) {\r
-    const effort = newSessionReasoningEffort();\r
-    if (sessionId) modelReasoningEffortBySession[sessionId] = effort;\r
-    try { localStorage.removeItem(LS_NEW_SESSION_REASONING_EFFORT); } catch (e) {}\r
-}\r
-\r
-function currentSessionReasoningEffort() {\r
-    return currentSessionId ? modelReasoningEffortBySession[currentSessionId] || '' : newSessionReasoningEffort();\r
-}\r
-\r
-async function setCurrentSessionReasoningEffort(effort) {\r
-    if (effort && !MODEL_REASONING_EFFORTS.includes(effort)) return false;\r
-    const sid = String(currentSessionId || '');\r
-    if (!sid) {\r
-        try {\r
-            if (effort) localStorage.setItem(LS_NEW_SESSION_REASONING_EFFORT, effort);\r
-            else localStorage.removeItem(LS_NEW_SESSION_REASONING_EFFORT);\r
-        } catch (e) {}\r
-        renderModelProfileControl();\r
-        return true;\r
-    }\r
-    if (modelReasoningEffortBusy[sid]) return false;\r
-    modelReasoningEffortBusy[sid] = { effort };\r
-    renderModelProfileControl();\r
-    try {\r
-        const response = await fetch('/sessions/' + encodeURIComponent(sid) + '/reasoning_effort', {\r
-            method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },\r
-            body: JSON.stringify({ reasoning_effort: effort }),\r
-        });\r
-        const data = await response.json();\r
-        if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '推理强度保存失败');\r
-        modelReasoningEffortBySession[sid] = effort;\r
-        if (sid === String(currentSessionId || '')) modelProfileSelectionEpoch += 1;\r
-        return true;\r
-    } catch (error) {\r
-        if (typeof appendLogVisible === 'function') appendLogVisible('推理强度保存失败: ' + String(error.message || error), 'error-log');\r
-        return false;\r
-    } finally {\r
-        delete modelReasoningEffortBusy[sid];\r
-        if (sid === String(currentSessionId || '')) {\r
-            renderModelProfileControl();\r
-        }\r
-    }\r
-}\r
-\r
-function newSessionModelProfileId() {\r
-    var memoryValue = String(modelProfileIdBySession[NEW_SESSION_DRAFT_KEY] || '');\r
-    if (memoryValue) return memoryValue;\r
-    try { return String(localStorage.getItem(LS_NEW_SESSION_MODEL_PROFILE) || ''); }\r
-    catch (e) { return ''; }\r
-}\r
-\r
-function setNewSessionModelProfileId(profileId) {\r
-    var value = String(profileId || '');\r
-    if (value) modelProfileIdBySession[NEW_SESSION_DRAFT_KEY] = value;\r
-    else delete modelProfileIdBySession[NEW_SESSION_DRAFT_KEY];\r
-    try {\r
-        if (value) localStorage.setItem(LS_NEW_SESSION_MODEL_PROFILE, value);\r
-        else localStorage.removeItem(LS_NEW_SESSION_MODEL_PROFILE);\r
-    } catch (e) { /* ignore */ }\r
-}\r
-\r
-function commitNewSessionModelProfile(sessionId) {\r
-    var value = newSessionModelProfileId();\r
-    if (value && sessionId) modelProfileIdBySession[String(sessionId)] = value;\r
-    setNewSessionModelProfileId('');\r
-    return value;\r
-}\r
-\r
-function h(str) {\r
-    return String(str == null ? '' : str)\r
-        .replace(/&/g, '&amp;')\r
-        .replace(/</g, '&lt;')\r
-        .replace(/>/g, '&gt;')\r
-        .replace(/"/g, '&quot;')\r
-        .replace(/'/g, '&#39;');\r
-}\r
-\r
-function modelToggleIcon(action) {\r
-    if (action === 'enable') {\r
-        return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>';\r
-    }\r
-    return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m5.5 5.5 13 13"/></svg>';\r
-}\r
-\r
-function modelToggleHtml(enabled) {\r
-    return '<span class="composer-model-toggle-ico" aria-hidden="true">' + modelToggleIcon(enabled ? 'disable' : 'enable') + '</span>';\r
-}\r
-\r
-function profileLabel(profile) {\r
-    if (!profile) return '默认方案';\r
-    return String(profile.name || profile.model || '未命名方案');\r
-}\r
-\r
-function formatContextWindow(value) {\r
-    var n = Number(value);\r
-    if (!Number.isFinite(n) || n <= 0) return String(value == null ? '' : value);\r
-    if (n >= 1000000) {\r
-        var m = n / 1000000;\r
-        return String(Math.round(m * 10) / 10).replace(/\\.0$/, '') + 'M';\r
-    }\r
-    if (n >= 1000) return String(Math.round(n / 1000)) + 'k';\r
-    return String(Math.round(n));\r
-}\r
-\r
-function canonicalLlmType(raw) {\r
-    var k = String(raw || '').trim().toLowerCase();\r
-    if (k === 'openai-responses' || k === 'responses' || k === '@ai-sdk/openai') return 'openai-responses';\r
-    if (k === 'openai' || k === 'openai-compatible' || k === 'openai_compatible' || k === 'compatible' || k === 'chat-completions' || k === 'local' || k === '@ai-sdk/openai-compatible') return 'openai';\r
-    if (k === 'anthropic' || k === 'claude' || k === 'messages' || k === '@ai-sdk/anthropic') return 'anthropic';\r
-    if (k === '') return 'openai';\r
-    return k;\r
-}\r
-function isResponsesProfile(profile) {\r
-    return canonicalLlmType(profile && profile.llm_type) === 'openai-responses';\r
-}\r
-function profileEffortValue(profile) {\r
-    var p = profile || {};\r
-    var thinkingDisabled = String(p.thinking_mode || '').toLowerCase() === 'disabled';\r
-    var usesResponses = isResponsesProfile(p);\r
-    return String(p.reasoning_effort || (usesResponses ? 'auto' : (thinkingDisabled ? 'none' : 'high'))).toLowerCase();\r
-}\r
-\r
-function profileMeta(profile) {\r
-    if (!profile) return '';\r
-    var model = profile.model || '';\r
-    var effort = profileEffortValue(profile);\r
-    var ctx = profile.context_window ? formatContextWindow(profile.context_window) + ' ctx' : '';\r
-    var out = profile.max_output_tokens ? formatContextWindow(profile.max_output_tokens) + ' out' : '';\r
-    return [model, effort, ctx, out].filter(Boolean).join(' · ');\r
-}\r
-\r
-function modelProfileCapabilityDescription(profile) {\r
-    var p = profile || {};\r
-    var language = (document.documentElement && document.documentElement.getAttribute('data-language'))\r
-        || localStorage.getItem('myagent-language')\r
-        || 'zh-CN';\r
-    if (language === 'en' && p.capability_description_en) return String(p.capability_description_en);\r
-    return String(p.capability_description || '');\r
-}\r
-\r
-function modelProfileUiLanguage() {\r
-    return (document.documentElement && document.documentElement.getAttribute('data-language'))\r
-        || localStorage.getItem('myagent-language')\r
-        || 'zh-CN';\r
-}\r
-\r
-function modelProfileHoverDetail(profile) {\r
-    var p = profile || {};\r
-    var english = modelProfileUiLanguage() === 'en';\r
-    var lines = [\r
-        (english ? 'Model profile: ' : '模型配置：') + profileLabel(p),\r
-        'model_porfile_id: ' + String(p.id || (english ? 'Not set' : '未设置')),\r
-        (english ? 'Model ID: ' : '模型 ID：') + String(p.model || (english ? 'Not set' : '未设置')),\r
-        (english ? 'API type: ' : '接口类型：') + String(p.llm_type || 'openai'),\r
-        (english ? 'Context window: ' : '上下文窗口：') + (p.context_window ? formatContextWindow(p.context_window) : (english ? 'Not set' : '未设置')),\r
-        (english ? 'Max output: ' : '最大输出：') + String(p.max_output_tokens || (english ? 'Not set' : '未设置')),\r
-        (english ? 'Thinking effort: ' : '思考强度：') + profileEffortValue(p),\r
-    ];\r
-    var capability = modelProfileCapabilityDescription(p);\r
-    if (capability) lines.push((english ? 'Capability: ' : '能力：') + capability);\r
-    lines.push((english ? 'Status: ' : '状态：') + (\r
-        p.enabled === false\r
-            ? (english ? 'Disabled' : '已禁用')\r
-            : (p.usable === false ? (english ? 'Not ready' : '未就绪') : (english ? 'Available' : '可用'))\r
-    ));\r
-    return lines.join('\\n');\r
-}\r
-\r
-function els() {\r
-    return {\r
-        control: document.getElementById('model-profile-control'),\r
-        trigger: document.getElementById('model-profile-trigger'),\r
-        current: document.getElementById('model-profile-current'),\r
-        menu: document.getElementById('model-profile-menu'),\r
-    };\r
-}\r
-\r
-async function loadModelProfilesForSwitcher(force) {\r
-    if (!force && modelProfilesCache && Date.now() - modelProfilesLoadedAt < MODEL_PROFILES_CACHE_TTL_MS) {\r
-        return modelProfilesCache;\r
-    }\r
-    if (modelProfilesLoadPromise) {\r
-        if (!force) return modelProfilesLoadPromise;\r
-        // An explicit refresh must still run if the older shared request\r
-        // failed; inheriting that rejection made recovery fail immediately.\r
-        await modelProfilesLoadPromise.catch(function () {});\r
-        return loadModelProfilesForSwitcher(true);\r
-    }\r
-    const promise = (async function () {\r
-        const data = typeof window !== 'undefined' && window.MyAgentResourceCache\r
-            ? await window.MyAgentResourceCache.get('/api/model_profiles', { force: !!force })\r
-            : await (await fetch('/api/model_profiles', { credentials: 'same-origin' })).json();\r
-        if (!data || !data.ok) throw new Error((data && data.error) || '模型配置加载失败');\r
-        modelProfilesCache = data;\r
-        modelProfilesLoadedAt = Date.now();\r
-        return data;\r
-    })();\r
-    modelProfilesLoadPromise = promise;\r
-    try { return await promise; }\r
-    finally { if (modelProfilesLoadPromise === promise) modelProfilesLoadPromise = null; }\r
-}\r
-\r
-function storedProfiles() {\r
-    if (!modelProfilesCache) return [];\r
-    return (modelProfilesCache.profiles || []).filter((profile) => profile);\r
-}\r
-\r
-function allProfiles() {\r
-    return storedProfiles().filter((profile) => profile.enabled !== false && profile.usable !== false);\r
-}\r
-\r
-function activeProfile() {\r
-    var list = allProfiles();\r
-    for (var i = 0; i < list.length; i += 1) {\r
-        if (String(list[i].id || '') === String(activeModelProfileId || '')) return list[i];\r
-    }\r
-    return list[0] || null;\r
-}\r
-\r
-function activeProfileContextWindow() {\r
-    var profile = activeProfile();\r
-    var n = profile && profile.context_window != null ? Number(profile.context_window) : 0;\r
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;\r
-}\r
-\r
-function closeModelMenu(restoreFocus) {\r
-    var e = els();\r
-    modelMenuPane = 'root';\r
-    if (e.menu) e.menu.classList.remove('is-open');\r
-    if (e.trigger) {\r
-        e.trigger.classList.remove('is-open');\r
-        e.trigger.setAttribute('aria-expanded', 'false');\r
-        if (restoreFocus) e.trigger.focus({ preventScroll: true });\r
-    }\r
-}\r
-\r
-function modelMenuIcon(kind) {\r
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' +\r
-        (kind === 'check' ? 'm5 12 4 4L19 6' : 'm9 5 7 7-7 7') + '"/></svg>';\r
-}\r
-\r
-function modelMenuItems() {\r
-    var e = els();\r
-    return e.menu ? Array.from(e.menu.querySelectorAll('[role="menuitem"], [role="menuitemradio"]')).filter((item) => !item.disabled) : [];\r
-}\r
-\r
-function setModelMenuPane(pane) {\r
-    const previous = modelMenuPane;\r
-    modelMenuPane = pane;\r
-    renderModelProfileControl();\r
-    constrainModelMenuToTitlebar();\r
-    const e = els();\r
-    const target = pane === 'root' ? e.menu.querySelector('[data-model-pane="' + previous + '"]')\r
-        : e.menu.querySelector('[aria-checked="true"]:not([disabled])');\r
-    (target || modelMenuItems()[0] || e.trigger).focus({ preventScroll: true });\r
-}\r
-\r
-function openModelMenu() {\r
-    var e = els();\r
-    if (!e.menu || !e.trigger) return;\r
-    constrainModelMenuToTitlebar();\r
-    e.menu.classList.add('is-open');\r
-    e.trigger.classList.add('is-open');\r
-    e.trigger.setAttribute('aria-expanded', 'true');\r
-}\r
-\r
-function constrainModelMenuToTitlebar() {\r
-    var e = els();\r
-    if (!e.menu || !e.trigger) return;\r
-    var titlebar = document.querySelector('.titlebar');\r
-    var titlebarBottom = titlebar ? titlebar.getBoundingClientRect().bottom : 44;\r
-    var triggerTop = e.trigger.getBoundingClientRect().top;\r
-    var available = Math.max(1, Math.floor(triggerTop - titlebarBottom - 8));\r
-    var rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize || '16') || 16;\r
-    var cap = Math.floor(44 * rootSize);\r
-    e.menu.style.setProperty('--composer-popover-max-height', Math.min(cap, available) + 'px');\r
-}\r
-\r
-function renderModelProfileControl() {\r
-    var e = els();\r
-    if (!e.trigger || !e.current || !e.menu) return;\r
-    var active = activeProfile();\r
-    const english = modelProfileUiLanguage() === 'en';\r
-    const effort = currentSessionReasoningEffort();\r
-    const effectiveEffort = active ? effort || profileEffortValue(active) : '';\r
-    const busy = !!(modelReasoningEffortBusy[currentSessionId] || modelProfileBusyBySession[currentSessionId]);\r
-    const focus = document.activeElement;\r
-    const focusAttr = e.menu.contains(focus) ? ['data-model-pane', 'data-profile-id', 'data-toggle-profile-id', 'data-reasoning-effort']\r
-        .find((attr) => focus.hasAttribute(attr)) : null;\r
-    const focusValue = focusAttr ? focus.getAttribute(focusAttr) : null;\r
-    e.current.innerHTML = '<span class="composer-model-current-name">' + h(active ? profileLabel(active) : (english ? 'No enabled models' : '没有启用的模型配置')) + '</span>' +\r
-        (active ? '<span class="composer-model-current-effort">' + h(effectiveEffort) + '</span>' : '');\r
-    e.trigger.setAttribute('aria-label', (english ? 'Select model and reasoning effort, current ' : '选择模型与推理强度，当前 ') +\r
-        (active ? profileLabel(active) + ' · ' + effectiveEffort : (english ? 'No enabled models' : '没有启用的模型配置')));\r
-    e.trigger.setAttribute('aria-haspopup', 'menu');\r
-    e.trigger.setAttribute('aria-controls', 'model-profile-menu');\r
-    e.trigger.setAttribute('aria-busy', String(busy));\r
-    e.trigger.removeAttribute('title');\r
-    e.trigger.removeAttribute('data-ui-tip');\r
-    e.menu.setAttribute('role', 'menu');\r
-    e.menu.setAttribute('aria-label', english ? 'Model and reasoning effort' : '模型与推理强度');\r
-    e.menu.setAttribute('aria-busy', String(busy));\r
-    var profiles = storedProfiles();\r
-    if (!profiles.length) {\r
-        e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">没有可用模型配置</span></button>';\r
-        return;\r
-    }\r
-    var html = '';\r
-    if (modelMenuPane === 'root' && active) {\r
-        html = '<button type="button" role="menuitem" class="composer-model-cell" data-model-pane="model">' +\r
-            '<span class="composer-model-cell-label">' + (english ? 'Model' : '模型') + '</span>' +\r
-            '<span class="composer-model-cell-value">' + h(profileLabel(active)) + '</span>' +\r
-            '<span class="composer-model-cell-chevron">' + modelMenuIcon('right') + '</span></button>' +\r
-            '<button type="button" role="menuitem" class="composer-model-cell" data-model-pane="effort">' +\r
-            '<span class="composer-model-cell-label">' + (english ? 'Reasoning effort' : '推理强度') + '</span>' +\r
-            '<span class="composer-model-cell-value">' + h(effectiveEffort) + '</span>' +\r
-            '<span class="composer-model-cell-chevron">' + modelMenuIcon('right') + '</span></button>';\r
-    } else if (modelMenuPane === 'effort' && active) {\r
-        html = [{ value: '', label: (english ? 'Model default' : '模型默认') + ' · ' + profileEffortValue(active) }]\r
-            .concat(MODEL_REASONING_EFFORTS.map((value) => ({ value, label: value }))).map((choice) => {\r
-                const selected = effort === choice.value;\r
-                return '<button type="button" role="menuitemradio" aria-checked="' + selected + '" class="composer-model-effort-option" data-reasoning-effort="' + choice.value + '"' +\r
-                    (busy ? ' disabled' : '') + '><span>' + h(choice.label) + '</span><span class="composer-model-check">' +\r
-                    (modelReasoningEffortBusy[currentSessionId] && modelReasoningEffortBusy[currentSessionId].effort === choice.value ? '<span class="composer-model-pending"></span>' : selected ? modelMenuIcon('check') : '') + '</span></button>';\r
-            }).join('');\r
-    } else {\r
-        html = '<div class="composer-model-list" role="group" aria-label="' + (english ? 'Model profiles' : '模型配置') + '">';\r
-        for (var i = 0; i < profiles.length; i += 1) {\r
-            var p = profiles[i] || {};\r
-            var id = String(p.id || '');\r
-            var enabled = p.enabled !== false;\r
-            var activeCls = id === String(activeModelProfileId || '') ? ' is-active' : '';\r
-            html += '<div class="composer-model-option-row' + (enabled ? '' : ' is-disabled') + '" data-ui-tip="' + h(modelProfileHoverDetail(p)) + '">'\r
-                + '<button type="button" class="composer-model-option' + activeCls + '" role="menuitemradio" aria-checked="' + (id === String(activeModelProfileId || '')) + '" data-profile-id="' + h(id) + '"' + (enabled && !busy ? '' : ' disabled') + '>'\r
-                + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'\r
-                + '<span class="composer-model-option-meta">' + h(profileMeta(p)) + '</span>'\r
-                + '</button>'\r
-                + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + modelToggleHtml(enabled) + '</button>'\r
-                + '</div>';\r
-        }\r
-        html += '</div>';\r
-    }\r
-    e.menu.innerHTML = html;\r
-    if (typeof initUiHoverTips === 'function') initUiHoverTips(e.menu);\r
-    e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {\r
-        btn.addEventListener('click', () => {\r
-            setCurrentSessionModelProfile(btn.getAttribute('data-profile-id') || '');\r
-            closeModelMenu(true);\r
-        });\r
-    });\r
-    e.menu.querySelectorAll('[data-toggle-profile-id]').forEach((btn) => {\r
-        btn.addEventListener('click', () => {\r
-            var enabled = btn.getAttribute('data-enabled') !== 'true';\r
-            setModelProfileEnabled(btn.getAttribute('data-toggle-profile-id') || '', enabled);\r
-        });\r
-    });\r
-    e.menu.querySelectorAll('[data-model-pane]').forEach((button) => {\r
-        button.addEventListener('click', () => setModelMenuPane(button.dataset.modelPane));\r
-    });\r
-    e.menu.querySelectorAll('[data-reasoning-effort]').forEach((button) => {\r
-        button.addEventListener('click', async () => {\r
-            const sid = String(currentSessionId || '');\r
-            const value = button.dataset.reasoningEffort;\r
-            if (value === currentSessionReasoningEffort() || await setCurrentSessionReasoningEffort(value)) {\r
-                if (sid === String(currentSessionId || '')) closeModelMenu(true);\r
-            }\r
-        });\r
-    });\r
-    if (focusAttr && e.menu.classList.contains('is-open')) {\r
-        const target = Array.from(e.menu.querySelectorAll('[' + focusAttr + ']')).find((item) => item.getAttribute(focusAttr) === focusValue && !item.disabled);\r
-        (target || e.trigger).focus({ preventScroll: true });\r
-    }\r
-}\r
-\r
-async function setModelProfileEnabled(profileId, enabled) {\r
-    const id = String(profileId || '');\r
-    const sid = String(currentSessionId || '');\r
-    if (!id || modelProfileToggleBusy[id]) return;\r
-    modelProfileToggleBusy[id] = true;\r
-    try {\r
-        var response = await fetch('/api/model_profiles/' + encodeURIComponent(id) + '/enabled', {\r
-            method: 'POST',\r
-            headers: { 'Content-Type': 'application/json' },\r
-            credentials: 'same-origin',\r
-            body: JSON.stringify({ enabled: enabled === true }),\r
-        });\r
-        var data = await response.json();\r
-        if (!data || !data.ok) throw new Error((data && data.error) || '模型配置启停失败');\r
-        await refreshModelProfileSelector(sid, { silent: true, forceProfiles: true });\r
-        openModelMenu();\r
-    } catch (err) {\r
-        if (typeof appendLogVisible === 'function') appendLogVisible('模型配置启停失败: ' + String(err.message || err), 'error-log');\r
-    } finally {\r
-        delete modelProfileToggleBusy[id];\r
-    }\r
-}\r
-\r
-function renderModelProfileLoadingMenu() {\r
-    var e = els();\r
-    if (!e.menu) return;\r
-    e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled>'\r
-        + '<span class="composer-model-option-name">正在加载模型配置</span>'\r
-        + '<span class="composer-model-option-meta">请稍候</span>'\r
-        + '</button>';\r
-}\r
-\r
-async function refreshModelProfileSelector(sessionId, opts) {\r
-    const sid = String(sessionId || currentSessionId || '');\r
-    if (sid !== String(currentSessionId || '')) return;\r
-    const requestEpoch = ++modelProfileSelectionEpoch;\r
-    var e = els();\r
-    opts = opts || {};\r
-    if (!e.control) return;\r
-    if (!opts.silent && !modelProfilesCache && e.current) e.current.textContent = '正在加载模型配置';\r
-    try {\r
-        const profilesRequest = loadModelProfilesForSwitcher(opts.forceProfiles);\r
-        const bindingUrl = '/sessions/' + encodeURIComponent(sid) + '/model_profile';\r
-        const readBinding = function (response) {\r
-            if (response.ok === false) throw new Error('会话模型绑定加载失败: ' + response.status);\r
-            return response.json();\r
-        };\r
-        const bindingRequest = !sid ? Promise.resolve(null)\r
-            : typeof fetchWithTimeout === 'function'\r
-                ? fetchWithTimeout(bindingUrl, { credentials: 'same-origin' }, 12000, readBinding)\r
-                : fetch(bindingUrl, { credentials: 'same-origin' }).then(readBinding);\r
-        var results = await Promise.all([profilesRequest, bindingRequest]);\r
-        var j = results[1];\r
-        var selectedProfileId = (sid ? modelProfileIdBySession[sid] : newSessionModelProfileId())\r
-            || modelProfilesCache.new_session_default_profile_id\r
-            || '';\r
-        if (sid) {\r
-            if (!j || !j.ok) throw new Error((j && j.error) || '会话模型绑定加载失败');\r
-            if (j && j.ok && j.profile_id) {\r
-                selectedProfileId = String(j.profile_id);\r
-            }\r
-        }\r
-        if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;\r
-        if (selectedProfileId && !(modelProfilesCache.profiles || []).some(function (profile) {\r
-            return String(profile.id || '') === selectedProfileId;\r
-        })) {\r
-            await loadModelProfilesForSwitcher(true);\r
-            if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;\r
-        }\r
-        if (sid) {\r
-            modelProfileIdBySession[sid] = selectedProfileId;\r
-            modelReasoningEffortBySession[sid] = String((j && j.reasoning_effort) || '');\r
-        }\r
-        activeModelProfileId = selectedProfileId;\r
-        if (e.trigger) e.trigger.removeAttribute('data-model-load-failed');\r
-        renderModelProfileControl();\r
-        return true;\r
-    } catch (err) {\r
-        if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;\r
-        var knownId = sid ? modelProfileIdBySession[sid] : newSessionModelProfileId();\r
-        var hasKnownBinding = knownId && modelProfilesCache && (modelProfilesCache.profiles || []).some(function (profile) {\r
-            return String(profile.id || '') === String(knownId);\r
-        });\r
-        if (hasKnownBinding) {\r
-            activeModelProfileId = knownId;\r
-            renderModelProfileControl();\r
-        } else if (e.current) {\r
-            e.current.textContent = '模型配置暂时不可用';\r
-        }\r
-        if (e.trigger) {\r
-            e.trigger.setAttribute('data-model-load-failed', 'true');\r
-            e.trigger.setAttribute('title', hasKnownBinding ? '模型配置刷新失败，显示上次成功加载的配置；可点击重试' : '模型配置加载失败；可点击重试');\r
-        }\r
-        if (e.menu) {\r
-            e.menu.innerHTML = '<button type="button" class="composer-model-option" data-model-profile-retry><span class="composer-model-option-name">重试加载模型配置</span><span class="composer-model-option-meta">' + h(err.message || err) + '</span></button>';\r
-            e.menu.querySelector('[data-model-profile-retry]').addEventListener('click', function () {\r
-                void refreshModelProfileSelectorInBackground(sid, {silent: true, forceProfiles: true, invalidate: true});\r
-            });\r
-        }\r
-        return false;\r
-    }\r
-}\r
-\r
-function refreshModelProfileSelectorInBackground(sessionId, opts) {\r
-    const sid = String(sessionId || currentSessionId || '');\r
-    if (sid !== String(currentSessionId || '')) return Promise.resolve();\r
-    opts = opts || {};\r
-    const existing = modelProfilesRefreshPromises[sid];\r
-    if (existing && existing.epoch === modelProfileSelectionEpoch) {\r
-        if (opts.forceProfiles) existing.opts.forceProfiles = true;\r
-        if (opts.invalidate) {\r
-            // 改绑/流关闭是权威状态边界：旧请求不能回写，完成后再拉一次。\r
-            existing.dirty = true;\r
-            existing.epoch = ++modelProfileSelectionEpoch;\r
-        }\r
-        return existing.promise;\r
-    }\r
-    const entry = { promise: null, epoch: modelProfileSelectionEpoch, dirty: false, opts: Object.assign({}, opts) };\r
-    const promise = (async function () {\r
-        var result;\r
-        do {\r
-            entry.dirty = false;\r
-            const refresh = refreshModelProfileSelector(sid, entry.opts);\r
-            entry.epoch = modelProfileSelectionEpoch;\r
-            result = await refresh;\r
-        } while (entry.dirty && sid === String(currentSessionId || '')\r
-            && entry.epoch === modelProfileSelectionEpoch);\r
-        return result;\r
-    })()\r
-        .catch(function (err) {\r
-            console.error('refresh model profiles failed:', err);\r
-        })\r
-        .finally(function () {\r
-            if (modelProfilesRefreshPromises[sid] === entry) {\r
-                delete modelProfilesRefreshPromises[sid];\r
-            }\r
-        });\r
-    entry.promise = promise;\r
-    modelProfilesRefreshPromises[sid] = entry;\r
-    return promise;\r
-}\r
-\r
-/** Pending notices mark uncertainty; authoritative binding/close share one refresh. */\r
-function noteModelBindingChanged(sessionId, runCtx, phase) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid || sid !== String(currentSessionId || '')) return Promise.resolve(false);\r
-    if (typeof refreshModelProfileSelectorInBackground !== 'function') return Promise.resolve(false);\r
-    const ctx = runCtx || {};\r
-    if (phase === 'pending') {\r
-        ctx.modelBindingDirty = true;\r
-        ctx.modelBindingVerified = false;\r
-        return Promise.resolve(false);\r
-    }\r
-    if (phase === 'closed') {\r
-        if (ctx.modelBindingRefreshPromise && !ctx.modelBindingDirty) {\r
-            const epoch = modelProfileSelectionEpoch;\r
-            return ctx.modelBindingRefreshPromise.then(function (success) {\r
-                if (success === false && epoch === modelProfileSelectionEpoch\r
-                    && sid === String(currentSessionId || '')) {\r
-                    return noteModelBindingChanged(sid, ctx, 'retry');\r
-                }\r
-                return success;\r
-            });\r
-        }\r
-        if (ctx.modelBindingVerified && !ctx.modelBindingDirty) return Promise.resolve(true);\r
-    }\r
-    ctx.modelBindingDirty = false;\r
-    const request = refreshModelProfileSelectorInBackground(sid, { silent: true, invalidate: true });\r
-    const promise = request.then(function (success) {\r
-        if (ctx.modelBindingRefreshPromise === promise) {\r
-            ctx.modelBindingVerified = success === true;\r
-            if (success === false) ctx.modelBindingDirty = true;\r
-        }\r
-        return success;\r
-    }).finally(function () {\r
-        if (ctx.modelBindingRefreshPromise === promise) ctx.modelBindingRefreshPromise = null;\r
-    });\r
-    ctx.modelBindingRefreshPromise = promise;\r
-    return promise;\r
-}\r
-\r
-async function setCurrentSessionModelProfile(profileId) {\r
-    const sid = String(currentSessionId || '');\r
-    const selectedProfileId = String(profileId || '');\r
-    if (!selectedProfileId) return;\r
-    if (!sid) {\r
-        setNewSessionModelProfileId(selectedProfileId);\r
-        modelProfileSelectionEpoch += 1;\r
-        activeModelProfileId = selectedProfileId;\r
-        renderModelProfileControl();\r
-        return;\r
-    }\r
-    if (modelProfileBusyBySession[sid]) return;\r
-    try {\r
-        var __oldId = String(activeModelProfileId || modelProfileIdBySession[sid] || '');\r
-        var __newId = String(selectedProfileId || '');\r
-        if (__oldId && __newId && __oldId !== __newId) {\r
-            var __profiles = (modelProfilesCache && modelProfilesCache.profiles) ? modelProfilesCache.profiles : storedProfiles();\r
-            var __oldProfile = null, __newProfile = null;\r
-            for (var __i = 0; __i < __profiles.length; __i++) {\r
-                var __pp = __profiles[__i] || {};\r
-                if (String(__pp.id || '') === __oldId) __oldProfile = __pp;\r
-                if (String(__pp.id || '') === __newId) __newProfile = __pp;\r
-            }\r
-            if (__oldProfile && __newProfile) {\r
-                var __oldType = canonicalLlmType(__oldProfile.llm_type);\r
-                var __newType = canonicalLlmType(__newProfile.llm_type);\r
-                if (__oldType !== __newType) {\r
-                    var __lang = (document.documentElement && document.documentElement.getAttribute('data-language')) || localStorage.getItem('myagent-language') || 'zh-CN';\r
-                    var __en = __lang === 'en';\r
-                    var __oldLabel = String(__oldProfile.name || __oldProfile.model || __oldId);\r
-                    var __newLabel = String(__newProfile.name || __newProfile.model || __newId);\r
-                    var __title = __en ? 'Model type mismatch' : '\\u6a21\\u578b\\u7c7b\\u578b\\u4e0d\\u4e00\\u81f4';\r
-                    var __msg = __en\r
-                        ? 'Model type mismatch, risk of history/tool-call incompatibility. Current "' + __oldLabel + '" (' + __oldType + ') -> target "' + __newLabel + '" (' + __newType + ') may cause truncated history, tool_call_id mismatch and errors. Continue?'\r
-                        : '\\u6a21\\u578b\\u7c7b\\u578b\\u4e0d\\u4e00\\u81f4\\uff0c\\u6709\\u5386\\u53f2\\u4e0e\\u5de5\\u5177\\u8c03\\u7528\\u4e0d\\u517c\\u5bb9\\u98ce\\u9669\\u3002\\u5f53\\u524d\\u201c' + __oldLabel + '\\u201d\\uff08' + __oldType + '\\uff09\\u2192\\u76ee\\u6807\\u201c' + __newLabel + '\\u201d\\uff08' + __newType + '\\uff09\\uff0c\\u8de8\\u7c7b\\u578b\\u5207\\u6362\\u53ef\\u80fd\\u5bfc\\u81f4\\u5386\\u53f2\\u622a\\u65ad\\u3001tool_call_id\\u9519\\u4f4d\\u800c\\u62a5\\u9519\\uff0c\\u662f\\u5426\\u7ee7\\u7eed\\u5207\\u6362\\uff1f';\r
-                    var __confirmed = false;\r
-                    if (typeof openUiModal === 'function') {\r
-                        __confirmed = await openUiModal({\r
-                            title: __title,\r
-                            message: __msg,\r
-                            confirmText: __en ? 'Continue' : '\\u7ee7\\u7eed\\u5207\\u6362',\r
-                            cancelText: __en ? 'Cancel' : '\\u53d6\\u6d88',\r
-                            danger: true,\r
-                            showCancel: true\r
-                        });\r
-                    } else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {\r
-                        __confirmed = window.confirm(__title + '\\n\\n' + __msg);\r
-                    }\r
-                    if (!__confirmed) return;\r
-                }\r
-            }\r
-        }\r
-    } catch (__confirmErr) { }\r
-    modelProfileBusyBySession[sid] = true;\r
-    try {\r
-        var response = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', {\r
-            method: 'POST',\r
-            headers: { 'Content-Type': 'application/json' },\r
-            credentials: 'same-origin',\r
-            body: JSON.stringify({ profile_id: selectedProfileId }),\r
-        });\r
-        var data = await response.json();\r
-        if (!data || !data.ok) throw new Error((data && data.error) || '切换失败');\r
-        modelProfileIdBySession[sid] = selectedProfileId;\r
-        if (sid !== String(currentSessionId || '')) return;\r
-        modelProfileSelectionEpoch += 1;\r
-        activeModelProfileId = selectedProfileId;\r
-        renderModelProfileControl();\r
-        var cachedTokens = selectContextTokens(sid);\r
-        var nextThreshold = activeProfileContextWindow();\r
-        if (cachedTokens && cachedTokens.estimated != null) {\r
-            recordContextTokens(\r
-                sid,\r
-                cachedTokens.estimated,\r
-                nextThreshold != null ? nextThreshold : cachedTokens.threshold\r
-            );\r
-        } else {\r
-            scheduleContextTokensAfterPaint(sid);\r
-        }\r
-    } catch (err) {\r
-        if (sid === String(currentSessionId || '')) {\r
-            appendLogVisible('模型配置切换失败: ' + String(err.message || err), 'error-log');\r
-            await refreshModelProfileSelector(sid);\r
-        }\r
-    } finally {\r
-        delete modelProfileBusyBySession[sid];\r
-    }\r
-}\r
-\r
-function initModelProfileSwitcher() {\r
-    var e = els();\r
-    if (!e.control || !e.trigger || !e.menu) return;\r
-    e.trigger.addEventListener('click', async () => {\r
-        var willOpen = !e.menu.classList.contains('is-open');\r
-        if (!willOpen) {\r
-            closeModelMenu();\r
-            return;\r
-        }\r
-        modelMenuPane = activeProfile() ? 'root' : 'model';\r
-        if (!e.menu.firstElementChild) renderModelProfileLoadingMenu();\r
-        openModelMenu();\r
-        const sid = String(currentSessionId || '');\r
-        const load = function () {\r
-            if (!e.menu.classList.contains('is-open') || sid !== String(currentSessionId || '')) return;\r
-            if (modelProfilesCache) renderModelProfileControl();\r
-            return refreshModelProfileSelectorInBackground(sid, { silent: true });\r
-        };\r
-        if (window.MyAgentUiTasks) window.MyAgentUiTasks.afterPaint(load).catch(console.warn);\r
-        else load();\r
-    });\r
-    if (window.MyAgentUiTasks) window.MyAgentUiTasks.bindIntent(e.trigger,\r
-        'model-profiles', function () { return loadModelProfilesForSwitcher(false); });\r
-    document.addEventListener('click', (ev) => {\r
-        // Pane rendering replaces the clicked row before this listener runs.\r
-        if (!ev.composedPath().includes(e.control)) closeModelMenu();\r
-    });\r
-    e.control.addEventListener('keydown', (ev) => {\r
-        if (!e.menu.classList.contains('is-open')) return;\r
-        const items = modelMenuItems();\r
-        if (ev.key === 'Escape' || ev.key === 'ArrowLeft' || (ev.key === 'Tab' && ev.shiftKey)) {\r
-            ev.preventDefault(); ev.stopPropagation();\r
-            if (modelMenuPane !== 'root' && activeProfile()) setModelMenuPane('root');\r
-            else closeModelMenu(true);\r
-        } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key) && items.length) {\r
-            ev.preventDefault();\r
-            const at = items.indexOf(document.activeElement);\r
-            const next = ev.key === 'Home' ? 0 : ev.key === 'End' ? items.length - 1 : at < 0 ?\r
-                (ev.key === 'ArrowUp' ? items.length - 1 : 0) : (at + (ev.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;\r
-            items[next].focus({ preventScroll: true });\r
-        } else if (ev.key === 'ArrowRight' && modelMenuPane === 'root' && document.activeElement.dataset.modelPane) {\r
-            ev.preventDefault(); setModelMenuPane(document.activeElement.dataset.modelPane);\r
-        } else if (ev.key === 'Tab') {\r
-            if (items.includes(document.activeElement)) {\r
-                ev.preventDefault(); document.activeElement.click();\r
-            } else if (document.activeElement === e.trigger && items.length) {\r
-                ev.preventDefault();\r
-                (items.find((item) => item.getAttribute('aria-checked') === 'true') || items[0]).focus({ preventScroll: true });\r
-            }\r
-        }\r
-    });\r
-    e.control.addEventListener('focusout', (ev) => {\r
-        if (ev.relatedTarget && !e.control.contains(ev.relatedTarget)) closeModelMenu();\r
-    });\r
-    document.addEventListener('keydown', (ev) => {\r
-        if (ev.key === 'Escape' && e.menu.classList.contains('is-open')) closeModelMenu(true);\r
-    });\r
-    window.addEventListener('resize', () => {\r
-        var fresh = els();\r
-        if (fresh.menu && fresh.menu.classList.contains('is-open')) constrainModelMenuToTitlebar();\r
-    });\r
-    refreshModelProfileSelectorInBackground(currentSessionId);\r
-}\r
-\r
-initModelProfileSwitcher();\r
-document.addEventListener('myagent:language-change', function () {\r
-    if (modelProfilesCache) renderModelProfileControl();\r
-});\r
-window.refreshModelProfileSelector = refreshModelProfileSelector;\r
-window.refreshModelProfileSelectorInBackground = refreshModelProfileSelectorInBackground;\r
-window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;\r
-window.addEventListener('myagent:catalog-invalidated', function () { modelProfilesLoadedAt = 0; });\r
-function retryFailedModelProfileRefresh() {\r
-    var trigger = els().trigger;\r
-    if (trigger && trigger.getAttribute('data-model-load-failed') === 'true') {\r
-        void refreshModelProfileSelectorInBackground(currentSessionId, {silent: true});\r
-    }\r
-}\r
-window.addEventListener('focus', retryFailedModelProfileRefresh);\r
-window.addEventListener('online', retryFailedModelProfileRefresh);\r
-document.addEventListener('myagent:settings-closed', function () {\r
-    refreshModelProfileSelectorInBackground(currentSessionId, { silent: true });\r
-});\r
+`,Ts=`let modelProfilesCache = null;
+let modelProfilesLoadedAt = 0;
+let modelProfilesLoadPromise = null;
+const MODEL_PROFILES_CACHE_TTL_MS = 30000;
+const modelProfilesRefreshPromises = Object.create(null);
+const modelProfileBusyBySession = Object.create(null);
+const modelProfileIdBySession = Object.create(null);
+const modelProfileToggleBusy = Object.create(null);
+let modelProfileSelectionEpoch = 0;
+let activeModelProfileId = '';
+const LS_NEW_SESSION_MODEL_PROFILE = 'myagent-new-session-model-profile';
+const LS_NEW_SESSION_REASONING_EFFORT = 'myagent-new-session-reasoning-effort';
+const MODEL_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const modelReasoningEffortBySession = Object.create(null);
+const modelReasoningEffortBusy = Object.create(null);
+let modelMenuPane = 'root';
+
+function newSessionReasoningEffort() {
+    try {
+        const effort = localStorage.getItem(LS_NEW_SESSION_REASONING_EFFORT) || '';
+        return MODEL_REASONING_EFFORTS.includes(effort) ? effort : '';
+    }
+    catch (e) { return ''; }
+}
+
+function commitNewSessionReasoningEffort(sessionId) {
+    const effort = newSessionReasoningEffort();
+    if (sessionId) modelReasoningEffortBySession[sessionId] = effort;
+    try { localStorage.removeItem(LS_NEW_SESSION_REASONING_EFFORT); } catch (e) {}
+}
+
+function currentSessionReasoningEffort() {
+    return currentSessionId ? modelReasoningEffortBySession[currentSessionId] || '' : newSessionReasoningEffort();
+}
+
+async function setCurrentSessionReasoningEffort(effort) {
+    if (effort && !MODEL_REASONING_EFFORTS.includes(effort)) return false;
+    const sid = String(currentSessionId || '');
+    if (!sid) {
+        try {
+            if (effort) localStorage.setItem(LS_NEW_SESSION_REASONING_EFFORT, effort);
+            else localStorage.removeItem(LS_NEW_SESSION_REASONING_EFFORT);
+        } catch (e) {}
+        renderModelProfileControl();
+        return true;
+    }
+    if (modelReasoningEffortBusy[sid]) return false;
+    modelReasoningEffortBusy[sid] = { effort };
+    renderModelProfileControl();
+    try {
+        const response = await fetch('/sessions/' + encodeURIComponent(sid) + '/reasoning_effort', {
+            method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reasoning_effort: effort }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data || !data.ok) throw new Error((data && data.error) || '推理强度保存失败');
+        modelReasoningEffortBySession[sid] = effort;
+        if (sid === String(currentSessionId || '')) modelProfileSelectionEpoch += 1;
+        return true;
+    } catch (error) {
+        if (typeof appendLogVisible === 'function') appendLogVisible('推理强度保存失败: ' + String(error.message || error), 'error-log');
+        return false;
+    } finally {
+        delete modelReasoningEffortBusy[sid];
+        if (sid === String(currentSessionId || '')) {
+            renderModelProfileControl();
+        }
+    }
+}
+
+function newSessionModelProfileId() {
+    var memoryValue = String(modelProfileIdBySession[NEW_SESSION_DRAFT_KEY] || '');
+    if (memoryValue) return memoryValue;
+    try { return String(localStorage.getItem(LS_NEW_SESSION_MODEL_PROFILE) || ''); }
+    catch (e) { return ''; }
+}
+
+function setNewSessionModelProfileId(profileId) {
+    var value = String(profileId || '');
+    if (value) modelProfileIdBySession[NEW_SESSION_DRAFT_KEY] = value;
+    else delete modelProfileIdBySession[NEW_SESSION_DRAFT_KEY];
+    try {
+        if (value) localStorage.setItem(LS_NEW_SESSION_MODEL_PROFILE, value);
+        else localStorage.removeItem(LS_NEW_SESSION_MODEL_PROFILE);
+    } catch (e) { /* ignore */ }
+}
+
+function commitNewSessionModelProfile(sessionId) {
+    var value = newSessionModelProfileId();
+    if (value && sessionId) modelProfileIdBySession[String(sessionId)] = value;
+    setNewSessionModelProfileId('');
+    return value;
+}
+
+function h(str) {
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function modelToggleIcon(action) {
+    if (action === 'enable') {
+        return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m5.5 5.5 13 13"/></svg>';
+}
+
+function modelToggleHtml(enabled) {
+    return '<span class="composer-model-toggle-ico" aria-hidden="true">' + modelToggleIcon(enabled ? 'disable' : 'enable') + '</span>';
+}
+
+function profileLabel(profile) {
+    if (!profile) return '默认方案';
+    return String(profile.name || profile.model || '未命名方案');
+}
+
+function formatContextWindow(value) {
+    var n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return String(value == null ? '' : value);
+    if (n >= 1000000) {
+        var m = n / 1000000;
+        return String(Math.round(m * 10) / 10).replace(/\\.0$/, '') + 'M';
+    }
+    if (n >= 1000) return String(Math.round(n / 1000)) + 'k';
+    return String(Math.round(n));
+}
+
+function canonicalLlmType(raw) {
+    var k = String(raw || '').trim().toLowerCase();
+    if (k === 'openai-responses' || k === 'responses' || k === '@ai-sdk/openai') return 'openai-responses';
+    if (k === 'openai' || k === 'openai-compatible' || k === 'openai_compatible' || k === 'compatible' || k === 'chat-completions' || k === 'local' || k === '@ai-sdk/openai-compatible') return 'openai';
+    if (k === 'anthropic' || k === 'claude' || k === 'messages' || k === '@ai-sdk/anthropic') return 'anthropic';
+    if (k === '') return 'openai';
+    return k;
+}
+function isResponsesProfile(profile) {
+    return canonicalLlmType(profile && profile.llm_type) === 'openai-responses';
+}
+function profileEffortValue(profile) {
+    var p = profile || {};
+    var thinkingDisabled = String(p.thinking_mode || '').toLowerCase() === 'disabled';
+    var usesResponses = isResponsesProfile(p);
+    return String(p.reasoning_effort || (usesResponses ? 'auto' : (thinkingDisabled ? 'none' : 'high'))).toLowerCase();
+}
+
+function profileMeta(profile) {
+    if (!profile) return '';
+    var model = profile.model || '';
+    var effort = profileEffortValue(profile);
+    var ctx = profile.context_window ? formatContextWindow(profile.context_window) + ' ctx' : '';
+    var out = profile.max_output_tokens ? formatContextWindow(profile.max_output_tokens) + ' out' : '';
+    return [model, effort, ctx, out].filter(Boolean).join(' · ');
+}
+
+function modelProfileCapabilityDescription(profile) {
+    var p = profile || {};
+    var language = (document.documentElement && document.documentElement.getAttribute('data-language'))
+        || localStorage.getItem('myagent-language')
+        || 'zh-CN';
+    if (language === 'en' && p.capability_description_en) return String(p.capability_description_en);
+    return String(p.capability_description || '');
+}
+
+function modelProfileUiLanguage() {
+    return (document.documentElement && document.documentElement.getAttribute('data-language'))
+        || localStorage.getItem('myagent-language')
+        || 'zh-CN';
+}
+
+function modelProfileHoverDetail(profile) {
+    var p = profile || {};
+    var english = modelProfileUiLanguage() === 'en';
+    var lines = [
+        (english ? 'Model profile: ' : '模型配置：') + profileLabel(p),
+        'model_porfile_id: ' + String(p.id || (english ? 'Not set' : '未设置')),
+        (english ? 'Model ID: ' : '模型 ID：') + String(p.model || (english ? 'Not set' : '未设置')),
+        (english ? 'API type: ' : '接口类型：') + String(p.llm_type || 'openai'),
+        (english ? 'Context window: ' : '上下文窗口：') + (p.context_window ? formatContextWindow(p.context_window) : (english ? 'Not set' : '未设置')),
+        (english ? 'Max output: ' : '最大输出：') + String(p.max_output_tokens || (english ? 'Not set' : '未设置')),
+        (english ? 'Thinking effort: ' : '思考强度：') + profileEffortValue(p),
+    ];
+    var capability = modelProfileCapabilityDescription(p);
+    if (capability) lines.push((english ? 'Capability: ' : '能力：') + capability);
+    lines.push((english ? 'Status: ' : '状态：') + (
+        p.enabled === false
+            ? (english ? 'Disabled' : '已禁用')
+            : (p.usable === false ? (english ? 'Not ready' : '未就绪') : (english ? 'Available' : '可用'))
+    ));
+    return lines.join('\\n');
+}
+
+function els() {
+    return {
+        control: document.getElementById('model-profile-control'),
+        trigger: document.getElementById('model-profile-trigger'),
+        current: document.getElementById('model-profile-current'),
+        menu: document.getElementById('model-profile-menu'),
+    };
+}
+
+async function loadModelProfilesForSwitcher(force) {
+    if (!force && modelProfilesCache && Date.now() - modelProfilesLoadedAt < MODEL_PROFILES_CACHE_TTL_MS) {
+        return modelProfilesCache;
+    }
+    if (modelProfilesLoadPromise) {
+        if (!force) return modelProfilesLoadPromise;
+        // An explicit refresh must still run if the older shared request
+        // failed; inheriting that rejection made recovery fail immediately.
+        await modelProfilesLoadPromise.catch(function () {});
+        return loadModelProfilesForSwitcher(true);
+    }
+    const promise = (async function () {
+        const data = typeof window !== 'undefined' && window.MyAgentResourceCache
+            ? await window.MyAgentResourceCache.get('/api/model_profiles', { force: !!force })
+            : await (await fetch('/api/model_profiles', { credentials: 'same-origin' })).json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '模型配置加载失败');
+        modelProfilesCache = data;
+        modelProfilesLoadedAt = Date.now();
+        return data;
+    })();
+    modelProfilesLoadPromise = promise;
+    try { return await promise; }
+    finally { if (modelProfilesLoadPromise === promise) modelProfilesLoadPromise = null; }
+}
+
+function storedProfiles() {
+    if (!modelProfilesCache) return [];
+    return (modelProfilesCache.profiles || []).filter((profile) => profile);
+}
+
+function allProfiles() {
+    return storedProfiles().filter((profile) => profile.enabled !== false && profile.usable !== false);
+}
+
+function activeProfile() {
+    var list = allProfiles();
+    for (var i = 0; i < list.length; i += 1) {
+        if (String(list[i].id || '') === String(activeModelProfileId || '')) return list[i];
+    }
+    return list[0] || null;
+}
+
+function activeProfileContextWindow() {
+    var profile = activeProfile();
+    var n = profile && profile.context_window != null ? Number(profile.context_window) : 0;
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+function closeModelMenu(restoreFocus) {
+    var e = els();
+    modelMenuPane = 'root';
+    if (e.menu) e.menu.classList.remove('is-open');
+    if (e.trigger) {
+        e.trigger.classList.remove('is-open');
+        e.trigger.setAttribute('aria-expanded', 'false');
+        if (restoreFocus) e.trigger.focus({ preventScroll: true });
+    }
+}
+
+function modelMenuIcon(kind) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' +
+        (kind === 'check' ? 'm5 12 4 4L19 6' : 'm9 5 7 7-7 7') + '"/></svg>';
+}
+
+function modelMenuItems() {
+    var e = els();
+    return e.menu ? Array.from(e.menu.querySelectorAll('[role="menuitem"], [role="menuitemradio"]')).filter((item) => !item.disabled) : [];
+}
+
+function setModelMenuPane(pane) {
+    const previous = modelMenuPane;
+    modelMenuPane = pane;
+    renderModelProfileControl();
+    constrainModelMenuToTitlebar();
+    const e = els();
+    const target = pane === 'root' ? e.menu.querySelector('[data-model-pane="' + previous + '"]')
+        : e.menu.querySelector('[aria-checked="true"]:not([disabled])');
+    (target || modelMenuItems()[0] || e.trigger).focus({ preventScroll: true });
+}
+
+function openModelMenu() {
+    var e = els();
+    if (!e.menu || !e.trigger) return;
+    constrainModelMenuToTitlebar();
+    e.menu.classList.add('is-open');
+    e.trigger.classList.add('is-open');
+    e.trigger.setAttribute('aria-expanded', 'true');
+}
+
+function constrainModelMenuToTitlebar() {
+    var e = els();
+    if (!e.menu || !e.trigger) return;
+    var titlebar = document.querySelector('.titlebar');
+    var titlebarBottom = titlebar ? titlebar.getBoundingClientRect().bottom : 44;
+    var triggerTop = e.trigger.getBoundingClientRect().top;
+    var available = Math.max(1, Math.floor(triggerTop - titlebarBottom - 8));
+    var rootSize = parseFloat(getComputedStyle(document.documentElement).fontSize || '16') || 16;
+    var cap = Math.floor(44 * rootSize);
+    e.menu.style.setProperty('--composer-popover-max-height', Math.min(cap, available) + 'px');
+}
+
+function renderModelProfileControl() {
+    var e = els();
+    if (!e.trigger || !e.current || !e.menu) return;
+    var active = activeProfile();
+    const english = modelProfileUiLanguage() === 'en';
+    const effort = currentSessionReasoningEffort();
+    const effectiveEffort = active ? effort || profileEffortValue(active) : '';
+    const busy = !!(modelReasoningEffortBusy[currentSessionId] || modelProfileBusyBySession[currentSessionId]);
+    const focus = document.activeElement;
+    const focusAttr = e.menu.contains(focus) ? ['data-model-pane', 'data-profile-id', 'data-toggle-profile-id', 'data-reasoning-effort']
+        .find((attr) => focus.hasAttribute(attr)) : null;
+    const focusValue = focusAttr ? focus.getAttribute(focusAttr) : null;
+    e.current.innerHTML = '<span class="composer-model-current-name">' + h(active ? profileLabel(active) : (english ? 'No enabled models' : '没有启用的模型配置')) + '</span>' +
+        (active ? '<span class="composer-model-current-effort">' + h(effectiveEffort) + '</span>' : '');
+    e.trigger.setAttribute('aria-label', (english ? 'Select model and reasoning effort, current ' : '选择模型与推理强度，当前 ') +
+        (active ? profileLabel(active) + ' · ' + effectiveEffort : (english ? 'No enabled models' : '没有启用的模型配置')));
+    e.trigger.setAttribute('aria-haspopup', 'menu');
+    e.trigger.setAttribute('aria-controls', 'model-profile-menu');
+    e.trigger.setAttribute('aria-busy', String(busy));
+    e.trigger.removeAttribute('title');
+    e.trigger.removeAttribute('data-ui-tip');
+    e.menu.setAttribute('role', 'menu');
+    e.menu.setAttribute('aria-label', english ? 'Model and reasoning effort' : '模型与推理强度');
+    e.menu.setAttribute('aria-busy', String(busy));
+    var profiles = storedProfiles();
+    if (!profiles.length) {
+        e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled><span class="composer-model-option-name">没有可用模型配置</span></button>';
+        return;
+    }
+    var html = '';
+    if (modelMenuPane === 'root' && active) {
+        html = '<button type="button" role="menuitem" class="composer-model-cell" data-model-pane="model">' +
+            '<span class="composer-model-cell-label">' + (english ? 'Model' : '模型') + '</span>' +
+            '<span class="composer-model-cell-value">' + h(profileLabel(active)) + '</span>' +
+            '<span class="composer-model-cell-chevron">' + modelMenuIcon('right') + '</span></button>' +
+            '<button type="button" role="menuitem" class="composer-model-cell" data-model-pane="effort">' +
+            '<span class="composer-model-cell-label">' + (english ? 'Reasoning effort' : '推理强度') + '</span>' +
+            '<span class="composer-model-cell-value">' + h(effectiveEffort) + '</span>' +
+            '<span class="composer-model-cell-chevron">' + modelMenuIcon('right') + '</span></button>';
+    } else if (modelMenuPane === 'effort' && active) {
+        html = [{ value: '', label: (english ? 'Model default' : '模型默认') + ' · ' + profileEffortValue(active) }]
+            .concat(MODEL_REASONING_EFFORTS.map((value) => ({ value, label: value }))).map((choice) => {
+                const selected = effort === choice.value;
+                return '<button type="button" role="menuitemradio" aria-checked="' + selected + '" class="composer-model-effort-option" data-reasoning-effort="' + choice.value + '"' +
+                    (busy ? ' disabled' : '') + '><span>' + h(choice.label) + '</span><span class="composer-model-check">' +
+                    (modelReasoningEffortBusy[currentSessionId] && modelReasoningEffortBusy[currentSessionId].effort === choice.value ? '<span class="composer-model-pending"></span>' : selected ? modelMenuIcon('check') : '') + '</span></button>';
+            }).join('');
+    } else {
+        html = '<div class="composer-model-list" role="group" aria-label="' + (english ? 'Model profiles' : '模型配置') + '">';
+        for (var i = 0; i < profiles.length; i += 1) {
+            var p = profiles[i] || {};
+            var id = String(p.id || '');
+            var enabled = p.enabled !== false;
+            var activeCls = id === String(activeModelProfileId || '') ? ' is-active' : '';
+            html += '<div class="composer-model-option-row' + (enabled ? '' : ' is-disabled') + '" data-ui-tip="' + h(modelProfileHoverDetail(p)) + '">'
+                + '<button type="button" class="composer-model-option' + activeCls + '" role="menuitemradio" aria-checked="' + (id === String(activeModelProfileId || '')) + '" data-profile-id="' + h(id) + '"' + (enabled && !busy ? '' : ' disabled') + '>'
+                + '<span class="composer-model-option-name">' + h(profileLabel(p)) + '</span>'
+                + '<span class="composer-model-option-meta">' + h(profileMeta(p)) + '</span>'
+                + '</button>'
+                + '<button type="button" class="composer-model-toggle" data-toggle-profile-id="' + h(id) + '" data-enabled="' + (enabled ? 'true' : 'false') + '" data-ui-tip="' + (enabled ? '禁用' : '启用') + '" aria-label="' + (enabled ? '禁用' : '启用') + '">' + modelToggleHtml(enabled) + '</button>'
+                + '</div>';
+        }
+        html += '</div>';
+    }
+    e.menu.innerHTML = html;
+    if (typeof initUiHoverTips === 'function') initUiHoverTips(e.menu);
+    e.menu.querySelectorAll('[data-profile-id]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            setCurrentSessionModelProfile(btn.getAttribute('data-profile-id') || '');
+            closeModelMenu(true);
+        });
+    });
+    e.menu.querySelectorAll('[data-toggle-profile-id]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            var enabled = btn.getAttribute('data-enabled') !== 'true';
+            setModelProfileEnabled(btn.getAttribute('data-toggle-profile-id') || '', enabled);
+        });
+    });
+    e.menu.querySelectorAll('[data-model-pane]').forEach((button) => {
+        button.addEventListener('click', () => setModelMenuPane(button.dataset.modelPane));
+    });
+    e.menu.querySelectorAll('[data-reasoning-effort]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const sid = String(currentSessionId || '');
+            const value = button.dataset.reasoningEffort;
+            if (value === currentSessionReasoningEffort() || await setCurrentSessionReasoningEffort(value)) {
+                if (sid === String(currentSessionId || '')) closeModelMenu(true);
+            }
+        });
+    });
+    if (focusAttr && e.menu.classList.contains('is-open')) {
+        const target = Array.from(e.menu.querySelectorAll('[' + focusAttr + ']')).find((item) => item.getAttribute(focusAttr) === focusValue && !item.disabled);
+        (target || e.trigger).focus({ preventScroll: true });
+    }
+}
+
+async function setModelProfileEnabled(profileId, enabled) {
+    const id = String(profileId || '');
+    const sid = String(currentSessionId || '');
+    if (!id || modelProfileToggleBusy[id]) return;
+    modelProfileToggleBusy[id] = true;
+    try {
+        var response = await fetch('/api/model_profiles/' + encodeURIComponent(id) + '/enabled', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ enabled: enabled === true }),
+        });
+        var data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '模型配置启停失败');
+        await refreshModelProfileSelector(sid, { silent: true, forceProfiles: true });
+        openModelMenu();
+    } catch (err) {
+        if (typeof appendLogVisible === 'function') appendLogVisible('模型配置启停失败: ' + String(err.message || err), 'error-log');
+    } finally {
+        delete modelProfileToggleBusy[id];
+    }
+}
+
+function renderModelProfileLoadingMenu() {
+    var e = els();
+    if (!e.menu) return;
+    e.menu.innerHTML = '<button type="button" class="composer-model-option" disabled>'
+        + '<span class="composer-model-option-name">正在加载模型配置</span>'
+        + '<span class="composer-model-option-meta">请稍候</span>'
+        + '</button>';
+}
+
+async function refreshModelProfileSelector(sessionId, opts) {
+    const sid = String(sessionId || currentSessionId || '');
+    if (sid !== String(currentSessionId || '')) return;
+    const requestEpoch = ++modelProfileSelectionEpoch;
+    var e = els();
+    opts = opts || {};
+    if (!e.control) return;
+    if (!opts.silent && !modelProfilesCache && e.current) e.current.textContent = '正在加载模型配置';
+    try {
+        const profilesRequest = loadModelProfilesForSwitcher(opts.forceProfiles);
+        const bindingUrl = '/sessions/' + encodeURIComponent(sid) + '/model_profile';
+        const readBinding = function (response) {
+            if (response.ok === false) throw new Error('会话模型绑定加载失败: ' + response.status);
+            return response.json();
+        };
+        const bindingRequest = !sid ? Promise.resolve(null)
+            : typeof fetchWithTimeout === 'function'
+                ? fetchWithTimeout(bindingUrl, { credentials: 'same-origin' }, 12000, readBinding)
+                : fetch(bindingUrl, { credentials: 'same-origin' }).then(readBinding);
+        var results = await Promise.all([profilesRequest, bindingRequest]);
+        var j = results[1];
+        var selectedProfileId = (sid ? modelProfileIdBySession[sid] : newSessionModelProfileId())
+            || modelProfilesCache.new_session_default_profile_id
+            || '';
+        if (sid) {
+            if (!j || !j.ok) throw new Error((j && j.error) || '会话模型绑定加载失败');
+            if (j && j.ok && j.profile_id) {
+                selectedProfileId = String(j.profile_id);
+            }
+        }
+        if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
+        if (selectedProfileId && !(modelProfilesCache.profiles || []).some(function (profile) {
+            return String(profile.id || '') === selectedProfileId;
+        })) {
+            await loadModelProfilesForSwitcher(true);
+            if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
+        }
+        if (sid) {
+            modelProfileIdBySession[sid] = selectedProfileId;
+            modelReasoningEffortBySession[sid] = String((j && j.reasoning_effort) || '');
+        }
+        activeModelProfileId = selectedProfileId;
+        if (e.trigger) e.trigger.removeAttribute('data-model-load-failed');
+        renderModelProfileControl();
+        return true;
+    } catch (err) {
+        if (sid !== String(currentSessionId || '') || requestEpoch !== modelProfileSelectionEpoch) return;
+        var knownId = sid ? modelProfileIdBySession[sid] : newSessionModelProfileId();
+        var hasKnownBinding = knownId && modelProfilesCache && (modelProfilesCache.profiles || []).some(function (profile) {
+            return String(profile.id || '') === String(knownId);
+        });
+        if (hasKnownBinding) {
+            activeModelProfileId = knownId;
+            renderModelProfileControl();
+        } else if (e.current) {
+            e.current.textContent = '模型配置暂时不可用';
+        }
+        if (e.trigger) {
+            e.trigger.setAttribute('data-model-load-failed', 'true');
+            e.trigger.setAttribute('title', hasKnownBinding ? '模型配置刷新失败，显示上次成功加载的配置；可点击重试' : '模型配置加载失败；可点击重试');
+        }
+        if (e.menu) {
+            e.menu.innerHTML = '<button type="button" class="composer-model-option" data-model-profile-retry><span class="composer-model-option-name">重试加载模型配置</span><span class="composer-model-option-meta">' + h(err.message || err) + '</span></button>';
+            e.menu.querySelector('[data-model-profile-retry]').addEventListener('click', function () {
+                void refreshModelProfileSelectorInBackground(sid, {silent: true, forceProfiles: true, invalidate: true});
+            });
+        }
+        return false;
+    }
+}
+
+function refreshModelProfileSelectorInBackground(sessionId, opts) {
+    const sid = String(sessionId || currentSessionId || '');
+    if (sid !== String(currentSessionId || '')) return Promise.resolve();
+    opts = opts || {};
+    const existing = modelProfilesRefreshPromises[sid];
+    if (existing && existing.epoch === modelProfileSelectionEpoch) {
+        if (opts.forceProfiles) existing.opts.forceProfiles = true;
+        if (opts.invalidate) {
+            // 改绑/流关闭是权威状态边界：旧请求不能回写，完成后再拉一次。
+            existing.dirty = true;
+            existing.epoch = ++modelProfileSelectionEpoch;
+        }
+        return existing.promise;
+    }
+    const entry = { promise: null, epoch: modelProfileSelectionEpoch, dirty: false, opts: Object.assign({}, opts) };
+    const promise = (async function () {
+        var result;
+        do {
+            entry.dirty = false;
+            const refresh = refreshModelProfileSelector(sid, entry.opts);
+            entry.epoch = modelProfileSelectionEpoch;
+            result = await refresh;
+        } while (entry.dirty && sid === String(currentSessionId || '')
+            && entry.epoch === modelProfileSelectionEpoch);
+        return result;
+    })()
+        .catch(function (err) {
+            console.error('refresh model profiles failed:', err);
+        })
+        .finally(function () {
+            if (modelProfilesRefreshPromises[sid] === entry) {
+                delete modelProfilesRefreshPromises[sid];
+            }
+        });
+    entry.promise = promise;
+    modelProfilesRefreshPromises[sid] = entry;
+    return promise;
+}
+
+/** Pending notices mark uncertainty; authoritative binding/close share one refresh. */
+function noteModelBindingChanged(sessionId, runCtx, phase) {
+    const sid = String(sessionId || '');
+    if (!sid || sid !== String(currentSessionId || '')) return Promise.resolve(false);
+    if (typeof refreshModelProfileSelectorInBackground !== 'function') return Promise.resolve(false);
+    const ctx = runCtx || {};
+    if (phase === 'pending') {
+        ctx.modelBindingDirty = true;
+        ctx.modelBindingVerified = false;
+        return Promise.resolve(false);
+    }
+    if (phase === 'closed') {
+        if (ctx.modelBindingRefreshPromise && !ctx.modelBindingDirty) {
+            const epoch = modelProfileSelectionEpoch;
+            return ctx.modelBindingRefreshPromise.then(function (success) {
+                if (success === false && epoch === modelProfileSelectionEpoch
+                    && sid === String(currentSessionId || '')) {
+                    return noteModelBindingChanged(sid, ctx, 'retry');
+                }
+                return success;
+            });
+        }
+        if (ctx.modelBindingVerified && !ctx.modelBindingDirty) return Promise.resolve(true);
+    }
+    ctx.modelBindingDirty = false;
+    const request = refreshModelProfileSelectorInBackground(sid, { silent: true, invalidate: true });
+    const promise = request.then(function (success) {
+        if (ctx.modelBindingRefreshPromise === promise) {
+            ctx.modelBindingVerified = success === true;
+            if (success === false) ctx.modelBindingDirty = true;
+        }
+        return success;
+    }).finally(function () {
+        if (ctx.modelBindingRefreshPromise === promise) ctx.modelBindingRefreshPromise = null;
+    });
+    ctx.modelBindingRefreshPromise = promise;
+    return promise;
+}
+
+async function setCurrentSessionModelProfile(profileId) {
+    const sid = String(currentSessionId || '');
+    const selectedProfileId = String(profileId || '');
+    if (!selectedProfileId) return;
+    if (!sid) {
+        setNewSessionModelProfileId(selectedProfileId);
+        modelProfileSelectionEpoch += 1;
+        activeModelProfileId = selectedProfileId;
+        renderModelProfileControl();
+        return;
+    }
+    if (modelProfileBusyBySession[sid]) return;
+    try {
+        var __oldId = String(activeModelProfileId || modelProfileIdBySession[sid] || '');
+        var __newId = String(selectedProfileId || '');
+        if (__oldId && __newId && __oldId !== __newId) {
+            var __profiles = (modelProfilesCache && modelProfilesCache.profiles) ? modelProfilesCache.profiles : storedProfiles();
+            var __oldProfile = null, __newProfile = null;
+            for (var __i = 0; __i < __profiles.length; __i++) {
+                var __pp = __profiles[__i] || {};
+                if (String(__pp.id || '') === __oldId) __oldProfile = __pp;
+                if (String(__pp.id || '') === __newId) __newProfile = __pp;
+            }
+            if (__oldProfile && __newProfile) {
+                var __oldType = canonicalLlmType(__oldProfile.llm_type);
+                var __newType = canonicalLlmType(__newProfile.llm_type);
+                if (__oldType !== __newType) {
+                    var __lang = (document.documentElement && document.documentElement.getAttribute('data-language')) || localStorage.getItem('myagent-language') || 'zh-CN';
+                    var __en = __lang === 'en';
+                    var __oldLabel = String(__oldProfile.name || __oldProfile.model || __oldId);
+                    var __newLabel = String(__newProfile.name || __newProfile.model || __newId);
+                    var __title = __en ? 'Model type mismatch' : '\\u6a21\\u578b\\u7c7b\\u578b\\u4e0d\\u4e00\\u81f4';
+                    var __msg = __en
+                        ? 'Model type mismatch, risk of history/tool-call incompatibility. Current "' + __oldLabel + '" (' + __oldType + ') -> target "' + __newLabel + '" (' + __newType + ') may cause truncated history, tool_call_id mismatch and errors. Continue?'
+                        : '\\u6a21\\u578b\\u7c7b\\u578b\\u4e0d\\u4e00\\u81f4\\uff0c\\u6709\\u5386\\u53f2\\u4e0e\\u5de5\\u5177\\u8c03\\u7528\\u4e0d\\u517c\\u5bb9\\u98ce\\u9669\\u3002\\u5f53\\u524d\\u201c' + __oldLabel + '\\u201d\\uff08' + __oldType + '\\uff09\\u2192\\u76ee\\u6807\\u201c' + __newLabel + '\\u201d\\uff08' + __newType + '\\uff09\\uff0c\\u8de8\\u7c7b\\u578b\\u5207\\u6362\\u53ef\\u80fd\\u5bfc\\u81f4\\u5386\\u53f2\\u622a\\u65ad\\u3001tool_call_id\\u9519\\u4f4d\\u800c\\u62a5\\u9519\\uff0c\\u662f\\u5426\\u7ee7\\u7eed\\u5207\\u6362\\uff1f';
+                    var __confirmed = false;
+                    if (typeof openUiModal === 'function') {
+                        __confirmed = await openUiModal({
+                            title: __title,
+                            message: __msg,
+                            confirmText: __en ? 'Continue' : '\\u7ee7\\u7eed\\u5207\\u6362',
+                            cancelText: __en ? 'Cancel' : '\\u53d6\\u6d88',
+                            danger: true,
+                            showCancel: true
+                        });
+                    } else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+                        __confirmed = window.confirm(__title + '\\n\\n' + __msg);
+                    }
+                    if (!__confirmed) return;
+                }
+            }
+        }
+    } catch (__confirmErr) { }
+    modelProfileBusyBySession[sid] = true;
+    try {
+        var response = await fetch('/sessions/' + encodeURIComponent(sid) + '/model_profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ profile_id: selectedProfileId }),
+        });
+        var data = await response.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || '切换失败');
+        modelProfileIdBySession[sid] = selectedProfileId;
+        if (sid !== String(currentSessionId || '')) return;
+        modelProfileSelectionEpoch += 1;
+        activeModelProfileId = selectedProfileId;
+        renderModelProfileControl();
+        var cachedTokens = selectContextTokens(sid);
+        var nextThreshold = activeProfileContextWindow();
+        if (cachedTokens && cachedTokens.estimated != null) {
+            recordContextTokens(
+                sid,
+                cachedTokens.estimated,
+                nextThreshold != null ? nextThreshold : cachedTokens.threshold
+            );
+        } else {
+            scheduleContextTokensAfterPaint(sid);
+        }
+    } catch (err) {
+        if (sid === String(currentSessionId || '')) {
+            appendLogVisible('模型配置切换失败: ' + String(err.message || err), 'error-log');
+            await refreshModelProfileSelector(sid);
+        }
+    } finally {
+        delete modelProfileBusyBySession[sid];
+    }
+}
+
+function initModelProfileSwitcher() {
+    var e = els();
+    if (!e.control || !e.trigger || !e.menu) return;
+    e.trigger.addEventListener('click', async () => {
+        var willOpen = !e.menu.classList.contains('is-open');
+        if (!willOpen) {
+            closeModelMenu();
+            return;
+        }
+        modelMenuPane = activeProfile() ? 'root' : 'model';
+        if (!e.menu.firstElementChild) renderModelProfileLoadingMenu();
+        openModelMenu();
+        const sid = String(currentSessionId || '');
+        const load = function () {
+            if (!e.menu.classList.contains('is-open') || sid !== String(currentSessionId || '')) return;
+            if (modelProfilesCache) renderModelProfileControl();
+            return refreshModelProfileSelectorInBackground(sid, { silent: true });
+        };
+        if (window.MyAgentUiTasks) window.MyAgentUiTasks.afterPaint(load).catch(console.warn);
+        else load();
+    });
+    if (window.MyAgentUiTasks) window.MyAgentUiTasks.bindIntent(e.trigger,
+        'model-profiles', function () { return loadModelProfilesForSwitcher(false); });
+    document.addEventListener('click', (ev) => {
+        // Pane rendering replaces the clicked row before this listener runs.
+        if (!ev.composedPath().includes(e.control)) closeModelMenu();
+    });
+    e.control.addEventListener('keydown', (ev) => {
+        if (!e.menu.classList.contains('is-open')) return;
+        const items = modelMenuItems();
+        if (ev.key === 'Escape' || ev.key === 'ArrowLeft' || (ev.key === 'Tab' && ev.shiftKey)) {
+            ev.preventDefault(); ev.stopPropagation();
+            if (modelMenuPane !== 'root' && activeProfile()) setModelMenuPane('root');
+            else closeModelMenu(true);
+        } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key) && items.length) {
+            ev.preventDefault();
+            const at = items.indexOf(document.activeElement);
+            const next = ev.key === 'Home' ? 0 : ev.key === 'End' ? items.length - 1 : at < 0 ?
+                (ev.key === 'ArrowUp' ? items.length - 1 : 0) : (at + (ev.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
+            items[next].focus({ preventScroll: true });
+        } else if (ev.key === 'ArrowRight' && modelMenuPane === 'root' && document.activeElement.dataset.modelPane) {
+            ev.preventDefault(); setModelMenuPane(document.activeElement.dataset.modelPane);
+        } else if (ev.key === 'Tab') {
+            if (items.includes(document.activeElement)) {
+                ev.preventDefault(); document.activeElement.click();
+            } else if (document.activeElement === e.trigger && items.length) {
+                ev.preventDefault();
+                (items.find((item) => item.getAttribute('aria-checked') === 'true') || items[0]).focus({ preventScroll: true });
+            }
+        }
+    });
+    e.control.addEventListener('focusout', (ev) => {
+        if (ev.relatedTarget && !e.control.contains(ev.relatedTarget)) closeModelMenu();
+    });
+    document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' && e.menu.classList.contains('is-open')) closeModelMenu(true);
+    });
+    window.addEventListener('resize', () => {
+        var fresh = els();
+        if (fresh.menu && fresh.menu.classList.contains('is-open')) constrainModelMenuToTitlebar();
+    });
+    refreshModelProfileSelectorInBackground(currentSessionId);
+}
+
+initModelProfileSwitcher();
+document.addEventListener('myagent:language-change', function () {
+    if (modelProfilesCache) renderModelProfileControl();
+});
+window.refreshModelProfileSelector = refreshModelProfileSelector;
+window.refreshModelProfileSelectorInBackground = refreshModelProfileSelectorInBackground;
+window.loadModelProfilesForSwitcher = loadModelProfilesForSwitcher;
+window.addEventListener('myagent:catalog-invalidated', function () { modelProfilesLoadedAt = 0; });
+function retryFailedModelProfileRefresh() {
+    var trigger = els().trigger;
+    if (trigger && trigger.getAttribute('data-model-load-failed') === 'true') {
+        void refreshModelProfileSelectorInBackground(currentSessionId, {silent: true});
+    }
+}
+window.addEventListener('focus', retryFailedModelProfileRefresh);
+window.addEventListener('online', retryFailedModelProfileRefresh);
+document.addEventListener('myagent:settings-closed', function () {
+    refreshModelProfileSelectorInBackground(currentSessionId, { silent: true });
+});
 `,Es=`let skillPickerCache = null;
 let skillPickerRefreshPromise = null;
 let skillPickerError = null;
@@ -25176,7 +25163,6 @@ var SIDEBAR_ICON_SVG = {
     plus: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>',
     dots: '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle></svg>',
     pin: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg>',
-    star: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3.6 2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.7-5.2 2.7 1-5.9L3.5 9.8l5.9-.9z"></path></svg>',
     close: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>',
     chevron: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>',
     check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"></path></svg>',
@@ -25238,7 +25224,6 @@ function buildSessionMoreMenuMarkup() {
         + '<button type="button" class="session-more-btn" aria-label="更多操作" aria-expanded="false" aria-haspopup="true" data-ui-tip="更多">'
         + '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span></button>'
         + '<div class="session-more-menu" role="menu">'
-        + '<button type="button" class="session-menu-favorite" role="menuitem"></button>'
         + '<button type="button" class="session-menu-pin" role="menuitem"></button>'
         + '<button type="button" class="session-menu-todo" role="menuitem"></button>'
         + '<button type="button" class="session-menu-rename" role="menuitem">重命名</button>'
@@ -25265,11 +25250,9 @@ function findSessionForActions(sessionId, fallback) {
 function syncSessionMenuLabels(wrap, sess) {
     if (!wrap || !sess) return;
     wrap._sessionMenuSession = sess;
-    var favorite = wrap.querySelector('.session-menu-favorite');
     var pin = wrap.querySelector('.session-menu-pin');
     var todo = wrap.querySelector('.session-menu-todo');
     var archive = wrap.querySelector('.session-menu-archive');
-    if (favorite) favorite.textContent = sess.favorite ? '取消收藏' : '收藏会话';
     if (pin) pin.textContent = sess.pinned ? '取消置顶' : '置顶会话';
     if (todo) todo.textContent = sess.todo ? '取消待办' : '设为待办';
     if (archive) archive.textContent = sess.archived ? '取消归档' : '归档会话';
@@ -25331,43 +25314,6 @@ async function toggleSessionPinnedFromMenu(sess) {
             if (previous) applyOptimisticSessionUpdate(sess.id, previous);
         }
         console.error('置顶失败', err);
-    }
-}
-
-async function toggleSessionFavoritedFromMenu(sess) {
-    const mutationToken = beginSidebarMetadataMutation();
-    let mutationCommitted = false;
-    let previous = null;
-    const hadAnyFavorite = sessionStore.list().some(function (item) {
-        return item && item.favorite && !item.archived;
-    });
-    try {
-        const formData = new FormData();
-        const nextFavorite = !sess.favorite;
-        previous = applyOptimisticSessionUpdate(sess.id, { favorite: nextFavorite });
-        formData.append('favorite', nextFavorite ? 'true' : 'false');
-        const response = await fetchWithTimeout(
-            '/sessions/' + encodeURIComponent(sess.id) + '/favorite',
-            { method: 'PUT', body: formData },
-            12000
-        );
-        if (!response.ok) {
-            throw new Error('favorite failed: ' + response.status);
-        }
-        const responsePayload = await response.json().catch(function () { return null; });
-        commitSidebarMetadataMutation(mutationToken, responsePayload);
-        mutationCommitted = true;
-        // 第一次收藏时自动展开收藏夹，否则会话会从原分组消失、用户看不到它去了哪里。
-        if (nextFavorite && !hadAnyFavorite && !sess.archived) {
-            persistSessionSectionExpanded('favorites', true);
-        }
-        await refreshSingleSessionRow(sess.id);
-    } catch (err) {
-        if (!mutationCommitted) {
-            cancelSidebarMetadataMutation(mutationToken);
-            if (previous) applyOptimisticSessionUpdate(sess.id, previous);
-        }
-        console.error('收藏失败', err);
     }
 }
 
@@ -25700,9 +25646,8 @@ function bindSessionActionMenu(wrap, getSession, rowDiv) {
     wrap.addEventListener('click', function (e) {
         var target = e.target && e.target.closest ? e.target.closest('[role="menuitem"]') : null;
         if (!target || !wrap.contains(target)) return;
-        var handler = target.classList.contains('session-menu-favorite') ? toggleSessionFavoritedFromMenu
-            : target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
-                : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu
+        var handler = target.classList.contains('session-menu-pin') ? toggleSessionPinnedFromMenu
+            : target.classList.contains('session-menu-todo') ? toggleSessionTodoFromMenu
                 : target.classList.contains('session-menu-rename') ? renameSessionFromMenu
                     : target.classList.contains('session-menu-workdir') ? changeSessionWorkDirFromMenu
                     : target.classList.contains('session-menu-archive') ? toggleSessionArchivedFromMenu
@@ -25772,8 +25717,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '<span class="session-todo-badge" aria-label="待办"' + (sess.todo ? '' : ' hidden') + '>待办</span>'
         + '<span class="session-draft-badge" aria-label="草稿" hidden>草稿</span>'
         + '<span class="session-item-date"></span>'
-        // 收藏标记：与置顶标记同排、同规格；hover 时一起淡出，把位置让给行内动作。
-        + '<span class="session-favorite-mark" aria-label="已收藏" title="已收藏"' + (sess.favorite ? '' : ' hidden') + '>' + SIDEBAR_ICON_SVG.star + '</span>'
         // 置顶标记（DSH 同款）：行尾、相对时间之后的一枚 16px 图钉；hover 时与时间一起淡出，
         // 把位置让给行内动作（置顶/⋯），避免同一位置出现两个图钉。
         + '<span class="session-pin-mark" aria-label="置顶" title="置顶"' + (sess.pinned ? '' : ' hidden') + '>' + SIDEBAR_ICON_SVG.pin + '</span>'
@@ -26132,7 +26075,6 @@ function computeSessionListLayoutKey() {
         }
     };
     pushIds('p', sections.pinned);
-    pushIds('f', sections.favorites);
     if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
         sections.normalGroups.forEach(function (group) {
             parts.push('g:' + String((group && group.key) || ''));
@@ -26158,7 +26100,6 @@ function computeSessionListContentMap() {
         map[s.id] = [
             s.name || '',
             s.pinned ? 'p' : '',
-            s.favorite ? 'f' : '',
             s.todo ? 't' : '',
             s.archived ? 'a' : '',
             s.last_activity_at || s.updated_at || '',
@@ -26195,7 +26136,6 @@ function patchSessionListRows(ids) {
         if (s && s.id) nextStreamMap[s.id] = !!s.stream_active;
     };
     (sections.pinned || []).forEach(collect);
-    (sections.favorites || []).forEach(collect);
     if (Array.isArray(sections.normalGroups) && sections.normalGroups.length) {
         sections.normalGroups.forEach(function (g) {
             // 与渲染/布局键一致：stream 映射只覆盖"实际渲染出的行"。
@@ -29848,9 +29788,7 @@ function initSessionSearchControls(head) {
 var sessionGroupManager = null;
 
 function sessionGroupManagerMembers(group) {
-    // 收藏会话在一级目录「收藏夹」里，不再参与常规时间 / 工作目录分组；
-    // 分组管理弹窗的成员列表必须与侧栏可见分组一致。
-    var sessions = selectAllSessions().filter(function (s) { return s && !s.archived && !s.draft && !s.favorite; });
+    var sessions = selectAllSessions().filter(function (s) { return s && !s.archived && !s.draft; });
     var groups = group.isWorkDirGroup ? selectNormalSessionWorkDirGroups(sessions) : selectNormalSessionTimeGroups(sessions);
     var current = groups.find(function (g) { return g.key === group.key; });
     return current ? current.sessions.slice() : [];
@@ -37329,33 +37267,33 @@ class DockController {
         return dockActiveDockPaneId(this.state);
     }
 }
-`,ei=`/**\r
- * Chrome glyphs, lifted verbatim from dsh's own sources (paths unmodified):\r
- *   - split: \`ui-dockkit/src/components/TabPanel.tsx\` SplitGlyph (panel frame\r
- *     with the divider at the centre)\r
- *   - fullscreen / exit fullscreen: \`ui-sidebar-right/src/client/shell/\r
- *     SidebarRight.tsx\` (figma extracts, four frame corners / two inward corners)\r
- *   - collapse: the panel-left outline from \`ui-primitives\`, mirrored by CSS\r
- *     (same glyph the expand button uses).\r
- * Generated from source; size is set by the stylesheet (15px inside a 28px\r
- * circle, like dsh's iconButton).\r
- */\r
-/* eslint-disable */\r
-const DOCK_ICON_SPLIT = \`<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM4.1828 14.0873L5.54303 14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715L4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C3.81478 14.0642 3.99127 14.0774 4.1828 14.0873ZM7.31989 1.88307H8.68012V14.1169H7.31989V1.88307Z"/></svg>\`;\r
-const DOCK_ICON_FULLSCREEN = \`<svg viewBox="0 0 16 16" fill="none" >\r
-      <g fill="currentColor" stroke="currentColor" stroke-width="0.105646" stroke-linecap="square">\r
-        <path d="M6.04798 2.13627V0.815964H5.99549L5.36158 0.817345V0.815964L3.39978 0.815274C3.01892 0.815274 2.67749 0.814821 2.39919 0.844967C2.10813 0.87655 1.80506 0.949512 1.52981 1.14949C1.3822 1.25681 1.25251 1.38652 1.14518 1.53412C0.945217 1.80935 0.872245 2.11246 0.840659 2.4035C0.810509 2.68178 0.810965 3.02324 0.810966 3.40409L0.811656 5.36589V5.9998L0.810966 6.05297L0.864137 6.05228H2.13196L2.18513 6.05297L2.18444 5.9998V5.36589L2.18513 3.40409C2.18513 2.99322 2.18631 2.73978 2.20653 2.55266C2.22499 2.38234 2.25273 2.34575 2.25556 2.34204C2.27837 2.31066 2.30635 2.28267 2.33774 2.25987C2.34207 2.25657 2.37978 2.22911 2.54835 2.21084C2.73548 2.19063 2.98893 2.18944 3.39978 2.18944L5.36158 2.18875L5.9948 2.18944H6.04867L6.04798 2.13627Z" />\r
-        <path d="M9.94031 13.86L9.94031 15.1803L9.99279 15.1803L10.6267 15.179L10.6267 15.1803L12.5885 15.181C12.9694 15.181 13.3108 15.1815 13.5891 15.1513C13.8801 15.1198 14.1832 15.0468 14.4585 14.8468C14.6061 14.7395 14.7358 14.6098 14.8431 14.4622C15.0431 14.187 15.116 13.8838 15.1476 13.5928C15.1778 13.3145 15.1773 12.9731 15.1773 12.5922L15.1766 10.6304L15.1766 9.9965L15.1773 9.94333L15.1241 9.94402L13.8563 9.94402L13.8032 9.94333L13.8038 9.9965L13.8038 10.6304L13.8032 12.5922C13.8032 13.0031 13.802 13.2565 13.7817 13.4437C13.7633 13.614 13.7355 13.6506 13.7327 13.6543C13.7099 13.6856 13.6819 13.7136 13.6505 13.7364C13.6462 13.7397 13.6085 13.7672 13.4399 13.7855C13.2528 13.8057 12.9993 13.8069 12.5885 13.8069L10.6267 13.8076L9.99348 13.8069L9.93962 13.8069L9.94031 13.86Z" />\r
-        <path d="M13.8568 6.05243H15.1771V5.99995L15.1757 5.36604H15.1771L15.1778 3.40423C15.1778 3.02337 15.1783 2.68194 15.1481 2.40365C15.1165 2.11259 15.0436 1.80952 14.8436 1.53427C14.7363 1.38666 14.6066 1.25697 14.459 1.14964C14.1837 0.949672 13.8806 0.8767 13.5896 0.845114C13.3113 0.814965 12.9698 0.815421 12.589 0.815421L10.6272 0.816112H9.99329L9.94011 0.815421L9.9408 0.868592V2.13641L9.94011 2.18958L9.99329 2.18889H10.6272L12.589 2.18958C12.9999 2.18958 13.2533 2.19077 13.4404 2.21099C13.6107 2.22944 13.6473 2.25719 13.651 2.26002C13.6824 2.28282 13.7104 2.31081 13.7332 2.34219C13.7365 2.34653 13.764 2.38424 13.7822 2.5528C13.8025 2.73993 13.8037 2.99339 13.8037 3.40423L13.8043 5.36604L13.8037 5.99926V6.05312L13.8568 6.05243Z" />\r
-        <path d="M2.12951 9.94389L0.809205 9.94389L0.809205 9.99637L0.810586 10.6303L0.809205 10.6303L0.808514 12.5921C0.808514 12.9729 0.808061 13.3144 0.838207 13.5927C0.86979 13.8837 0.942753 14.1868 1.14273 14.4621C1.25005 14.6097 1.37976 14.7394 1.52736 14.8467C1.80259 15.0467 2.1057 15.1196 2.39674 15.1512C2.67502 15.1814 3.01648 15.1809 3.39733 15.1809L5.35913 15.1802L5.99304 15.1802L6.04621 15.1809L6.04552 15.1277L6.04552 13.8599L6.04621 13.8067L5.99304 13.8074L5.35913 13.8074L3.39733 13.8067C2.98646 13.8067 2.73302 13.8056 2.5459 13.7853C2.37559 13.7669 2.33899 13.7391 2.33528 13.7363C2.3039 13.7135 2.27591 13.6855 2.25311 13.6541C2.24981 13.6498 2.22235 13.6121 2.20408 13.4435C2.18387 13.2564 2.18268 13.0029 2.18268 12.5921L2.18199 10.6303L2.18268 9.99706L2.18268 9.9432L2.12951 9.94389Z" />\r
-      </g>\r
-    </svg>\`;\r
-const DOCK_ICON_EXIT_FULLSCREEN = \`<svg viewBox="0 0 16 16" fill="none" >\r
-      <g fill="currentColor" stroke="currentColor" stroke-width="0.105646" stroke-linecap="square">\r
-        <path d="M10.698 0.379607H9.43015L9.37698 0.378916L9.37767 0.432087V1.066L9.37698 4.0277C9.37698 4.40856 9.37653 4.74998 9.40667 5.02828C9.43826 5.31934 9.51053 5.62311 9.71051 5.89835C9.81779 6.04587 9.94762 6.1757 10.0951 6.28298C10.3704 6.48296 10.6741 6.55523 10.9652 6.58682C11.2435 6.61696 11.5849 6.61651 11.9658 6.61651L14.9275 6.61582H15.5614L15.6146 6.61651L15.6139 6.56334V5.29552L15.6146 5.24235L15.5614 5.24304H14.9275L11.9658 5.24235C11.5545 5.24235 11.3009 5.24191 11.1137 5.22163C10.9443 5.20329 10.9078 5.17501 10.9038 5.17191C10.8724 5.14911 10.8444 5.12112 10.8216 5.08974C10.8185 5.08566 10.7902 5.04908 10.7719 4.87982C10.7516 4.69263 10.7511 4.439 10.7511 4.0277L10.7505 1.066V0.432087L10.7511 0.378916L10.698 0.379607Z" />\r
-        <path d="M5.29031 15.6167L6.55813 15.6167L6.6113 15.6174L6.61061 15.5642L6.61061 14.9303L6.6113 11.9686C6.6113 11.5878 6.61176 11.2463 6.58161 10.968C6.55003 10.677 6.47775 10.3732 6.27777 10.098C6.17049 9.95045 6.04067 9.82062 5.89315 9.71334C5.6179 9.51336 5.31413 9.44109 5.02307 9.40951C4.74478 9.37936 4.40335 9.37981 4.02249 9.37981L1.06079 9.3805L0.426879 9.3805L0.373708 9.37981L0.374398 9.43298L0.374398 10.7008L0.373708 10.754L0.426879 10.7533L1.06079 10.7533L4.02249 10.754C4.43379 10.754 4.68742 10.7544 4.87461 10.7747C5.04393 10.793 5.08047 10.8213 5.08453 10.8244C5.11591 10.8472 5.1439 10.8752 5.1667 10.9066C5.16982 10.9107 5.19808 10.9472 5.21642 11.1165C5.2367 11.3037 5.23714 11.5573 5.23714 11.9686L5.23783 14.9303L5.23783 15.5642L5.23714 15.6174L5.29031 15.6167Z" />\r
-      </g>\r
-    </svg>\`;\r
+`,ei=`/**
+ * Chrome glyphs, lifted verbatim from dsh's own sources (paths unmodified):
+ *   - split: \`ui-dockkit/src/components/TabPanel.tsx\` SplitGlyph (panel frame
+ *     with the divider at the centre)
+ *   - fullscreen / exit fullscreen: \`ui-sidebar-right/src/client/shell/
+ *     SidebarRight.tsx\` (figma extracts, four frame corners / two inward corners)
+ *   - collapse: the panel-left outline from \`ui-primitives\`, mirrored by CSS
+ *     (same glyph the expand button uses).
+ * Generated from source; size is set by the stylesheet (15px inside a 28px
+ * circle, like dsh's iconButton).
+ */
+/* eslint-disable */
+const DOCK_ICON_SPLIT = \`<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM4.1828 14.0873L5.54303 14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715L4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C3.81478 14.0642 3.99127 14.0774 4.1828 14.0873ZM7.31989 1.88307H8.68012V14.1169H7.31989V1.88307Z"/></svg>\`;
+const DOCK_ICON_FULLSCREEN = \`<svg viewBox="0 0 16 16" fill="none" >
+      <g fill="currentColor" stroke="currentColor" stroke-width="0.105646" stroke-linecap="square">
+        <path d="M6.04798 2.13627V0.815964H5.99549L5.36158 0.817345V0.815964L3.39978 0.815274C3.01892 0.815274 2.67749 0.814821 2.39919 0.844967C2.10813 0.87655 1.80506 0.949512 1.52981 1.14949C1.3822 1.25681 1.25251 1.38652 1.14518 1.53412C0.945217 1.80935 0.872245 2.11246 0.840659 2.4035C0.810509 2.68178 0.810965 3.02324 0.810966 3.40409L0.811656 5.36589V5.9998L0.810966 6.05297L0.864137 6.05228H2.13196L2.18513 6.05297L2.18444 5.9998V5.36589L2.18513 3.40409C2.18513 2.99322 2.18631 2.73978 2.20653 2.55266C2.22499 2.38234 2.25273 2.34575 2.25556 2.34204C2.27837 2.31066 2.30635 2.28267 2.33774 2.25987C2.34207 2.25657 2.37978 2.22911 2.54835 2.21084C2.73548 2.19063 2.98893 2.18944 3.39978 2.18944L5.36158 2.18875L5.9948 2.18944H6.04867L6.04798 2.13627Z" />
+        <path d="M9.94031 13.86L9.94031 15.1803L9.99279 15.1803L10.6267 15.179L10.6267 15.1803L12.5885 15.181C12.9694 15.181 13.3108 15.1815 13.5891 15.1513C13.8801 15.1198 14.1832 15.0468 14.4585 14.8468C14.6061 14.7395 14.7358 14.6098 14.8431 14.4622C15.0431 14.187 15.116 13.8838 15.1476 13.5928C15.1778 13.3145 15.1773 12.9731 15.1773 12.5922L15.1766 10.6304L15.1766 9.9965L15.1773 9.94333L15.1241 9.94402L13.8563 9.94402L13.8032 9.94333L13.8038 9.9965L13.8038 10.6304L13.8032 12.5922C13.8032 13.0031 13.802 13.2565 13.7817 13.4437C13.7633 13.614 13.7355 13.6506 13.7327 13.6543C13.7099 13.6856 13.6819 13.7136 13.6505 13.7364C13.6462 13.7397 13.6085 13.7672 13.4399 13.7855C13.2528 13.8057 12.9993 13.8069 12.5885 13.8069L10.6267 13.8076L9.99348 13.8069L9.93962 13.8069L9.94031 13.86Z" />
+        <path d="M13.8568 6.05243H15.1771V5.99995L15.1757 5.36604H15.1771L15.1778 3.40423C15.1778 3.02337 15.1783 2.68194 15.1481 2.40365C15.1165 2.11259 15.0436 1.80952 14.8436 1.53427C14.7363 1.38666 14.6066 1.25697 14.459 1.14964C14.1837 0.949672 13.8806 0.8767 13.5896 0.845114C13.3113 0.814965 12.9698 0.815421 12.589 0.815421L10.6272 0.816112H9.99329L9.94011 0.815421L9.9408 0.868592V2.13641L9.94011 2.18958L9.99329 2.18889H10.6272L12.589 2.18958C12.9999 2.18958 13.2533 2.19077 13.4404 2.21099C13.6107 2.22944 13.6473 2.25719 13.651 2.26002C13.6824 2.28282 13.7104 2.31081 13.7332 2.34219C13.7365 2.34653 13.764 2.38424 13.7822 2.5528C13.8025 2.73993 13.8037 2.99339 13.8037 3.40423L13.8043 5.36604L13.8037 5.99926V6.05312L13.8568 6.05243Z" />
+        <path d="M2.12951 9.94389L0.809205 9.94389L0.809205 9.99637L0.810586 10.6303L0.809205 10.6303L0.808514 12.5921C0.808514 12.9729 0.808061 13.3144 0.838207 13.5927C0.86979 13.8837 0.942753 14.1868 1.14273 14.4621C1.25005 14.6097 1.37976 14.7394 1.52736 14.8467C1.80259 15.0467 2.1057 15.1196 2.39674 15.1512C2.67502 15.1814 3.01648 15.1809 3.39733 15.1809L5.35913 15.1802L5.99304 15.1802L6.04621 15.1809L6.04552 15.1277L6.04552 13.8599L6.04621 13.8067L5.99304 13.8074L5.35913 13.8074L3.39733 13.8067C2.98646 13.8067 2.73302 13.8056 2.5459 13.7853C2.37559 13.7669 2.33899 13.7391 2.33528 13.7363C2.3039 13.7135 2.27591 13.6855 2.25311 13.6541C2.24981 13.6498 2.22235 13.6121 2.20408 13.4435C2.18387 13.2564 2.18268 13.0029 2.18268 12.5921L2.18199 10.6303L2.18268 9.99706L2.18268 9.9432L2.12951 9.94389Z" />
+      </g>
+    </svg>\`;
+const DOCK_ICON_EXIT_FULLSCREEN = \`<svg viewBox="0 0 16 16" fill="none" >
+      <g fill="currentColor" stroke="currentColor" stroke-width="0.105646" stroke-linecap="square">
+        <path d="M10.698 0.379607H9.43015L9.37698 0.378916L9.37767 0.432087V1.066L9.37698 4.0277C9.37698 4.40856 9.37653 4.74998 9.40667 5.02828C9.43826 5.31934 9.51053 5.62311 9.71051 5.89835C9.81779 6.04587 9.94762 6.1757 10.0951 6.28298C10.3704 6.48296 10.6741 6.55523 10.9652 6.58682C11.2435 6.61696 11.5849 6.61651 11.9658 6.61651L14.9275 6.61582H15.5614L15.6146 6.61651L15.6139 6.56334V5.29552L15.6146 5.24235L15.5614 5.24304H14.9275L11.9658 5.24235C11.5545 5.24235 11.3009 5.24191 11.1137 5.22163C10.9443 5.20329 10.9078 5.17501 10.9038 5.17191C10.8724 5.14911 10.8444 5.12112 10.8216 5.08974C10.8185 5.08566 10.7902 5.04908 10.7719 4.87982C10.7516 4.69263 10.7511 4.439 10.7511 4.0277L10.7505 1.066V0.432087L10.7511 0.378916L10.698 0.379607Z" />
+        <path d="M5.29031 15.6167L6.55813 15.6167L6.6113 15.6174L6.61061 15.5642L6.61061 14.9303L6.6113 11.9686C6.6113 11.5878 6.61176 11.2463 6.58161 10.968C6.55003 10.677 6.47775 10.3732 6.27777 10.098C6.17049 9.95045 6.04067 9.82062 5.89315 9.71334C5.6179 9.51336 5.31413 9.44109 5.02307 9.40951C4.74478 9.37936 4.40335 9.37981 4.02249 9.37981L1.06079 9.3805L0.426879 9.3805L0.373708 9.37981L0.374398 9.43298L0.374398 10.7008L0.373708 10.754L0.426879 10.7533L1.06079 10.7533L4.02249 10.754C4.43379 10.754 4.68742 10.7544 4.87461 10.7747C5.04393 10.793 5.08047 10.8213 5.08453 10.8244C5.11591 10.8472 5.1439 10.8752 5.1667 10.9066C5.16982 10.9107 5.19808 10.9472 5.21642 11.1165C5.2367 11.3037 5.23714 11.5573 5.23714 11.9686L5.23783 14.9303L5.23783 15.5642L5.23714 15.6174L5.29031 15.6167Z" />
+      </g>
+    </svg>\`;
 `,ni=`/**
  * Pointer ownership shared by the docked surface and the float layer.
  *
