@@ -80,11 +80,24 @@ if __name__ == "__main__":
     async def lifespan(app: FastAPI):
         import cpu_pressure
 
+        async def _timed_step(label, awaitable):
+            started_at = time.perf_counter()
+            result = await awaitable
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            if elapsed_ms >= 100:
+                logging.getLogger(__name__).info(
+                    "startup_step %s ms=%d", label, int(elapsed_ms)
+                )
+            return result
+
         cpu_pressure.start()
         pressure_probe_task = asyncio.create_task(cpu_pressure.event_loop_lag_probe())
         # 启动时打开浏览器
         _schedule_browser_open("127.0.0.1", _listen_port)
-        await asyncio.to_thread(reconcile_orphaned_subagent_runs)
+        await _timed_step(
+            "orphaned_subagents",
+            asyncio.to_thread(reconcile_orphaned_subagent_runs),
+        )
         import runtime_observability
         from agent_harness import session_manager
         from session_lifecycle import cancel_run_tasks_by_id, is_run_active
@@ -174,9 +187,9 @@ if __name__ == "__main__":
         schedule_runtime_auto_migration()
         from agent_team.tools import start_auto_scheduler, stop_auto_scheduler
 
-        await start_auto_scheduler()
+        await _timed_step("auto_scheduler", start_auto_scheduler())
         try:
-            await start_webui_lifecycle()
+            await _timed_step("webui_lifecycle", start_webui_lifecycle())
             yield
         finally:
             cpu_pressure.stop()
