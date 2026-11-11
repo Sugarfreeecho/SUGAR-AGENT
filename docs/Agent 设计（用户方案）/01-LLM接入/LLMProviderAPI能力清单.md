@@ -18,7 +18,7 @@
 |---|---|---|
 | 重试：4 次、退避 1s 起；错误可重试性分类 | `agent_openai.py` `OPENAI_MAX_RETRIES`、`_classify_candidate_failure` | 【卡】 |
 | 首 token 竞速对冲（hedge）：30s 未达即并发布备请求、可关、胜者胜出 | `agent_openai.py` hedge 常量与 `run_*` 逻辑 | 【卡】 |
-| 共享逻辑请求预算：单请求预算 6 次物理请求（hedge/重试/fallback 共摊） | `agent_openai.py` `_LogicalRequestBudget` | 【卡】 |
+| 共享逻辑请求预算：单请求预算 10 次物理请求（hedge/重试共摊，fallback 不计入） | `agent_openai.py` `_LogicalRequestBudget` | 【卡】 |
 | 时限与并发：总截止 600s、in-flight 上限 3 | `agent_openai.py` | 【卡】 |
 | 流式降级：流式失败降为整段（buffered-via-stream）；非流式路径经流式缓冲实现，保留对冲/取消能力 | `agent_openai.py` `_buffered_chat_completion_via_stream` | 【卡】 |
 | 用户中断/取消：steer/cancel 贯穿 hedge 与流 | `agent_loop.py`、`agent_openai.py` | 【单】 |

@@ -32,6 +32,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
+from urllib.parse import urlsplit
 
 import dotenv
 import httpx
@@ -58,6 +59,7 @@ from agent_openai import (
     _classify_candidate_failure,
     _candidate_retry_policy,
     _is_media_input_error,
+    _media_error_is_specific,
     _media_error_modalities,
     _merge_system_prompt_for_single_system_model,
     _messages_to_params_for_client,
@@ -1546,6 +1548,15 @@ class LocalNetworkUnavailableError(ConnectionError):
     """The machine is offline, so provider fallback must not fan out."""
 
 
+class LocalDnsUnavailableError(LocalNetworkUnavailableError):
+    """The local resolver cannot resolve names, so no provider endpoint is usable.
+
+    Separate from a plain offline error so logs and the run loop can tell
+    "no egress at all" from "DNS is the broken layer". Both must pause the
+    candidate chain instead of walking it.
+    """
+
+
 def _exception_http_status(exc: BaseException) -> Optional[int]:
     """Extract an HTTP status without retaining an SDK response object."""
     values = [getattr(exc, "status_code", None)]
@@ -1651,6 +1662,187 @@ def machine_network_available() -> bool:
         return True
 
 
+# ---- 本机 DNS 解析自检 ----------------------------------------------------
+# WinINet 只回答"网卡是否连着"：DNS 解析挂掉时它依然报在线，于是整条模型
+# 候选链会被依次打到一个已经失效的解析器上（现场：getaddrinfo failed 之后
+# 每个候选都是 Connection error，四跳全灭）。这里用真实名字解析补上这一维，
+# 把"环境级出网故障"与"单个候选域名故障"分开处理。
+_DNS_ERROR_MARKERS = (
+    "getaddrinfo failed",
+    "errno 11001",
+    "name or service not known",
+    "nodename nor servname provided",
+    "temporary failure in name resolution",
+    "no address associated with hostname",
+    "name resolution",
+    "dns lookup",
+    "dns resolution",
+    "failed to resolve host",
+    "eai_again",
+    "eai_noname",
+)
+
+_DNS_PROBE_CACHE: Dict[str, Tuple[float, bool]] = {}
+_DNS_PROBE_CACHE_LOCK = threading.Lock()
+_DNS_PROBE_CACHE_TTL_SEC = 10.0
+
+
+def _exception_text_chain(exc: BaseException, depth: int = 4) -> str:
+    """Flatten an exception plus its cause chain for marker matching."""
+    parts: List[str] = []
+    seen: Set[int] = set()
+    current: Optional[BaseException] = exc
+    while current is not None and depth > 0 and id(current) not in seen:
+        seen.add(id(current))
+        parts.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+        depth -= 1
+    return " | ".join(parts).lower()
+
+
+def is_dns_resolution_error(exc: BaseException) -> bool:
+    """True when the failure came from resolving a hostname, not from the peer.
+
+    ``httpx``/OpenAI SDK wrap resolver failures (``ConnectError: Connection
+    error.``), so the marker scan walks ``__cause__``/``__context__`` as well.
+    """
+    if isinstance(exc, socket.gaierror):
+        return True
+    try:
+        text = _exception_text_chain(exc)
+    except Exception:
+        return False
+    return any(marker in text for marker in _DNS_ERROR_MARKERS)
+
+
+def _dns_probe_hosts() -> List[str]:
+    raw = os.getenv("LOCAL_DNS_PROBE_HOSTS", "www.baidu.com,cloudflare.com")
+    return [item.strip() for item in str(raw or "").split(",") if item.strip()]
+
+
+def _dns_probe_timeout() -> float:
+    try:
+        return max(0.2, float(os.getenv("LOCAL_DNS_PROBE_TIMEOUT_SEC", "1.5")))
+    except (TypeError, ValueError):
+        return 1.5
+
+
+def _resolve_host_now(host: str, timeout: float) -> bool:
+    """Resolve one hostname with a hard deadline.
+
+    ``socket.getaddrinfo`` has no timeout parameter, so the lookup runs on a
+    daemon thread and is abandoned when the deadline passes: a hung resolver
+    must not stall the candidate loop that is trying to diagnose it.
+    """
+    outcome: Dict[str, bool] = {}
+
+    def _lookup() -> None:
+        try:
+            socket.getaddrinfo(host, None)
+            outcome["ok"] = True
+        except OSError:
+            outcome["ok"] = False
+
+    worker = threading.Thread(target=_lookup, name="dns-probe", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    return bool(outcome.get("ok"))
+
+
+def _resolve_host_cached(host: str, timeout: float, *, force: bool = False) -> bool:
+    key = str(host or "").strip().lower()
+    if not key:
+        return False
+    now = time.monotonic()
+    with _DNS_PROBE_CACHE_LOCK:
+        cached = _DNS_PROBE_CACHE.get(key)
+    if cached is not None and not force and now - cached[0] <= _DNS_PROBE_CACHE_TTL_SEC:
+        return cached[1]
+    ok = _resolve_host_now(key, timeout)
+    with _DNS_PROBE_CACHE_LOCK:
+        _DNS_PROBE_CACHE[key] = (now, ok)
+        while len(_DNS_PROBE_CACHE) > 64:
+            _DNS_PROBE_CACHE.pop(next(iter(_DNS_PROBE_CACHE)), None)
+    return ok
+
+
+def local_dns_available(*, force: bool = False) -> bool:
+    """True when at least one probe hostname resolves through the local resolver.
+
+    "At least one" keeps split-horizon or filtered-DNS networks usable; set
+    ``LOCAL_DNS_PROBE_HOSTS`` to an always-resolvable internal name if needed.
+    """
+    hosts = _dns_probe_hosts()
+    if not hosts:
+        return True
+    timeout = _dns_probe_timeout()
+    return any(_resolve_host_cached(host, timeout, force=force) for host in hosts)
+
+
+def _is_loopback_host(host: str) -> bool:
+    value = str(host or "").strip().lower().strip("[]")
+    if not value:
+        return True
+    return value in {"localhost", "::1"} or value.startswith("127.")
+
+
+class _EgressVerdict:
+    """Result of inspecting a failed attempt against the local egress state."""
+
+    __slots__ = ("offline_error", "host_dns_failure")
+
+    def __init__(
+        self,
+        offline_error: Optional[BaseException] = None,
+        host_dns_failure: bool = False,
+    ) -> None:
+        self.offline_error = offline_error
+        self.host_dns_failure = bool(host_dns_failure)
+
+
+_EGRESS_OK = _EgressVerdict()
+
+
+def check_local_egress(
+    exc: BaseException,
+    candidate: Optional[Dict[str, Any]] = None,
+) -> _EgressVerdict:
+    """Decide whether a failed attempt is an environment outage, not a model fault.
+
+    * OS offline (WinINet + TCP probe) → ``LocalNetworkUnavailableError``:
+      pause the chain, do not fan out.
+    * name resolution broken for this candidate *and* for the probe hosts →
+      ``LocalDnsUnavailableError``: the whole chain shares one dead resolver,
+      so switching models is pure latency.
+    * only this candidate's hostname is unresolvable while public names work →
+      ``host_dns_failure``: skip same-model retries and switch candidate.
+    """
+    if not _is_network_connectivity_error(exc):
+        return _EGRESS_OK
+    if not machine_network_available():
+        return _EgressVerdict(
+            LocalNetworkUnavailableError(
+                "The local machine is offline; waiting for network recovery."
+            )
+        )
+    host = str((candidate or {}).get("host") or "").strip()
+    if _is_loopback_host(host):
+        return _EGRESS_OK
+    dns_broken = is_dns_resolution_error(exc)
+    host_unresolved = not _resolve_host_cached(
+        host, _dns_probe_timeout(), force=dns_broken
+    )
+    if not dns_broken and not host_unresolved:
+        return _EGRESS_OK
+    if not local_dns_available(force=True):
+        return _EgressVerdict(
+            LocalDnsUnavailableError(
+                "Local DNS resolution is unavailable; waiting for network recovery."
+            )
+        )
+    return _EgressVerdict(host_dns_failure=host_unresolved)
+
+
 # 应用层已有候选模型切换与运行级重试；SDK 内部重试（默认 2 次、遵守
 # Retry-After）只会把 429/5xx 的等待时间放大数倍，必须关闭。
 _OPENAI_SDK_KWARGS = {"max_retries": 0}
@@ -1739,6 +1931,7 @@ class _FallbackCompletions:
     ):
         self._candidates = candidates
         self._status_callback = status_callback
+        self._media_projection_notices: set[tuple[str, tuple[str, ...]]] = set()
 
     def set_status_callback(
         self,
@@ -1817,11 +2010,14 @@ class _FallbackCompletions:
             request_has_media = _api_messages_have_media(
                 list(call_kwargs.get("messages") or [])
             )
-            if request_has_media and not required_modalities.issubset(
-                _candidate_input_modalities(item)
-            ):
+            missing_modalities = required_modalities - _candidate_input_modalities(item)
+            if request_has_media and missing_modalities:
                 call_kwargs["messages"] = _serialized_messages_to_text_only(
-                    list(call_kwargs.get("messages") or [])
+                    list(call_kwargs.get("messages") or []),
+                    rejected=missing_modalities,
+                )
+                self._note_media_projection(
+                    str(item.get("model") or ""), missing_modalities
                 )
             try:
                 if idx > 0:
@@ -1845,12 +2041,18 @@ class _FallbackCompletions:
                             adopt(item)
                         return result
                     except Exception as exc:
-                        if _is_network_connectivity_error(exc) and not machine_network_available():
-                            raise LocalNetworkUnavailableError(
-                                "The local machine is offline; waiting for network recovery."
-                            ) from exc
+                        egress = check_local_egress(exc, item)
+                        if egress.offline_error is not None:
+                            raise egress.offline_error from exc
+                        if egress.host_dns_failure and retry_index < retry_attempts:
+                            logger.warning(
+                                "候选域名无法解析（本机 DNS 正常），跳过同模型重试: model=%s host=%s",
+                                _masked_model_label(str(item.get("model") or "")),
+                                str(item.get("host") or "unknown"),
+                            )
                         if (
                             retry_index < retry_attempts
+                            and not egress.host_dns_failure
                             and _classify_candidate_failure(exc) == "retry"
                             and _claim_additional_recovery_request()
                         ):
@@ -1892,8 +2094,16 @@ class _FallbackCompletions:
                                 for modality in item["input_modalities"]
                             )
                             mark_failed = item.get("mark_modalities_failed")
-                            if callable(mark_failed):
+                            # Only persist a modality the provider actually named;
+                            # an ambiguous "multimodal unsupported" must not
+                            # permanently drop image support for the profile.
+                            if callable(mark_failed) and _media_error_is_specific(exc):
                                 mark_failed(sorted(rejected_modalities), exc)
+                            elif callable(mark_failed):
+                                logger.warning(
+                                    "媒体报错未指明具体模态，仅在本次运行内降级: model=%s",
+                                    _masked_model_label(str(item.get("model") or "")),
+                                )
                             else:
                                 legacy_mark_failed = item.get("mark_multimodal_failed")
                                 if callable(legacy_mark_failed):
@@ -1908,14 +2118,14 @@ class _FallbackCompletions:
                     # 内层重试循环已判定本机离线并包装；此处必须放行，
                     # 不能把“暂停回退”信号当作普通候选失败继续切换。
                     raise
-                if _is_network_connectivity_error(exc) and not machine_network_available():
+                egress = check_local_egress(exc, item)
+                if egress.offline_error is not None:
                     logger.info(
-                        "本机网络不可用，暂停模型回退: model=%s",
+                        "本机出网不可用，暂停模型回退: model=%s reason=%s",
                         _masked_model_label(str(item.get("model") or "")),
+                        type(egress.offline_error).__name__,
                     )
-                    raise LocalNetworkUnavailableError(
-                        "The local machine is offline; waiting for network recovery."
-                    ) from exc
+                    raise egress.offline_error from exc
                 last_error = exc
                 last_model = str(item.get("model") or "")
                 logger.warning(
@@ -1945,6 +2155,26 @@ class _FallbackCompletions:
             )
         except Exception:
             logger.debug("多模态回退状态回调失败", exc_info=True)
+
+
+    def _note_media_projection(self, model: str, modalities: set[str]) -> None:
+        """Record a declared-capability projection instead of degrading silently.
+
+        Log only: the projection is the declared behaviour of the selected
+        profile, so it must not raise a user-facing fallback notice.
+        """
+        labels = "、".join(sorted(item for item in modalities if item)) or "多媒体"
+        notice_key = (model, tuple(sorted(modalities)))
+        if notice_key in self._media_projection_notices:
+            return
+        if len(self._media_projection_notices) >= 64:
+            self._media_projection_notices.clear()
+        self._media_projection_notices.add(notice_key)
+        logger.warning(
+            "模型未声明 %s 输入，本次请求改为文本引用（附件路径保留）: model=%s",
+            labels,
+            _masked_model_label(model),
+        )
 
 
     def _emit_retry_status(
@@ -2439,10 +2669,9 @@ class ExecutorLLMClient:
                 }
                 return result
             except Exception as exc:
-                if _is_network_connectivity_error(exc) and not machine_network_available():
-                    raise LocalNetworkUnavailableError(
-                        "The local machine is offline; waiting for network recovery."
-                    ) from exc
+                egress = check_local_egress(exc, item)
+                if egress.offline_error is not None:
+                    raise egress.offline_error from exc
                 last_error = exc
                 last_model = model
                 logger.warning(
@@ -2551,11 +2780,14 @@ class ExecutorLLMClient:
             request_has_media = _api_messages_have_media(
                 list(call_kwargs.get("messages") or [])
             )
-            if request_has_media and not required_modalities.issubset(
-                _candidate_input_modalities(item)
-            ):
+            missing_modalities = required_modalities - _candidate_input_modalities(item)
+            if request_has_media and missing_modalities:
                 call_kwargs["messages"] = _serialized_messages_to_text_only(
-                    list(call_kwargs.get("messages") or [])
+                    list(call_kwargs.get("messages") or []),
+                    rejected=missing_modalities,
+                )
+                self.chat.completions._note_media_projection(
+                    str(item.get("model") or ""), missing_modalities
                 )
             transport = item.get("transport")
             if transport is None:
@@ -2634,12 +2866,18 @@ class ExecutorLLMClient:
                         # The preview is visible, but no answer was committed.
                         # Close it before another attempt and discard its reasoning.
                         yield TransportEvent("reasoning_reset")
-                    if _is_network_connectivity_error(exc) and not machine_network_available():
-                        raise LocalNetworkUnavailableError(
-                            "The local machine is offline; waiting for network recovery."
-                        ) from exc
+                    egress = check_local_egress(exc, item)
+                    if egress.offline_error is not None:
+                        raise egress.offline_error from exc
+                    if egress.host_dns_failure and retry_index < retry_attempts:
+                        logger.warning(
+                            "候选域名无法解析（本机 DNS 正常），跳过同模型重试: model=%s host=%s",
+                            _masked_model_label(str(item.get("model") or "")),
+                            str(item.get("host") or "unknown"),
+                        )
                     if (
                         retry_index < retry_attempts
+                        and not egress.host_dns_failure
                         and _classify_candidate_failure(exc) == "retry"
                         and _claim_additional_recovery_request()
                     ):
@@ -2677,7 +2915,7 @@ class ExecutorLLMClient:
                             for modality in item["input_modalities"]
                         )
                         mark_failed = item.get("mark_modalities_failed")
-                        if callable(mark_failed):
+                        if callable(mark_failed) and _media_error_is_specific(exc):
                             mark_failed(sorted(rejected_modalities), exc)
                         self.chat.completions._emit_multimodal_fallback_status(
                             str(item.get("model") or "")
@@ -8862,6 +9100,14 @@ def _record_profile_modalities_failure(
         _invalidate_executor_config_cache()
 
 
+def _profile_request_host(profile: dict) -> str:
+    """Endpoint hostname of a profile, used by the DNS/offline egress check."""
+    try:
+        return str(urlsplit(str(profile.get("base_url") or "")).hostname or "").strip().lower()
+    except Exception:
+        return ""
+
+
 def _profile_candidate(profile: dict) -> Dict[str, Any]:
     cache_key = "profile:" + model_profiles.profile_cache_key(profile)
     cached = _executor_override_cache.get(cache_key)
@@ -8920,6 +9166,8 @@ def _profile_candidate(profile: dict) -> Dict[str, Any]:
         "transport": transport,
         "provider": provider.value,
         "model": cached[1],
+        # 供出网判定使用：连接失败时先看这个域名还能不能解析。
+        "host": _profile_request_host(profile),
         "max_output_tokens": int(profile.get("max_output_tokens") or MAX_OUTPUT_TOKENS),
         "context_window": int(profile.get("context_window") or CONTEXT_WINDOW),
         "temperature": _profile_temperature(profile),

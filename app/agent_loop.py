@@ -81,7 +81,10 @@ from agent_harness import (
     session_work_root_raw,
     session_work_dir,
     LocalNetworkUnavailableError,
+    LocalDnsUnavailableError,
     machine_network_available,
+    local_dns_available,
+    is_dns_resolution_error,
     _is_network_connectivity_error,
     _redact_runtime_log_text,
 )
@@ -4497,8 +4500,14 @@ async def _wait_for_local_network_recovery(
     state: State,
     emit: Optional[Callable[[Dict[str, Any]], Any]],
     poll_seconds: float = 15.0,
+    require_dns: bool = False,
 ) -> bool:
-    """Sleep without model retries only while the local machine is offline."""
+    """Sleep without model retries only while the local machine is offline.
+
+    ``require_dns`` is set when the failure was a resolver fault: the OS and
+    TCP probes can recover several seconds before name resolution does, and
+    resuming early would just burn another candidate chain on a dead resolver.
+    """
     sid = str(state.get("session_id") or "").strip()
     state["_runtime_stage"] = "network_waiting"
     announced_at = 0.0
@@ -4507,6 +4516,8 @@ async def _wait_for_local_network_recovery(
         if sid and _state_interrupt_requested(state):
             return False
         recovered = await asyncio.to_thread(machine_network_available)
+        if recovered and require_dns:
+            recovered = await asyncio.to_thread(local_dns_available)
         if recovered:
             state["_runtime_stage"] = "react"
             if emit:
@@ -4516,6 +4527,7 @@ async def _wait_for_local_network_recovery(
                         "type": "status",
                         "content": "本机网络已恢复，正在继续任务…",
                         "network_recovered": True,
+                        "dns_unavailable": False,
                         "ephemeral": True,
                     },
                     emit=emit,
@@ -5626,7 +5638,7 @@ def _classify_api_error_leaf(exc: BaseException) -> dict:
     if _is_network_connectivity_error(exc):
         return {"code": "NET", "title": "网络连接失败",
                 "msg": "无法连接到 API 服务器。",
-                "solution": "请检查网络连接、当前 model profile 的 API Base URL、VPN/代理设置。",
+                "solution": "请检查网络连接与 DNS 解析、当前 model profile 的 API Base URL、VPN/代理设置。",
                 "retry": 0}
     if isinstance(exc, AuthenticationError) or status_code == 401:
         return {"code": "401", "title": "API 认证失败",
@@ -9396,6 +9408,17 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         local_network_offline = isinstance(_llm_exc, LocalNetworkUnavailableError)
                         if not local_network_offline:
                             local_network_offline = not await asyncio.to_thread(machine_network_available)
+                        # DNS 是独立的一层：WinINet 与 TCP 都正常时它仍可能整体失效，
+                        # 此时任何候选都连不上，必须和断网一样沉睡等待。
+                        dns_unavailable = isinstance(_llm_exc, LocalDnsUnavailableError)
+                        if not dns_unavailable and is_dns_resolution_error(_llm_exc):
+                            dns_unavailable = not await asyncio.to_thread(local_dns_available)
+                        if dns_unavailable:
+                            local_network_offline = True
+                            logger.warning(
+                                "本机 DNS 解析不可用，暂停模型调用并等待恢复: error=%s",
+                                _redact_runtime_log_text(_llm_exc),
+                            )
                         if local_network_offline:
                             if emit:
                                 await _push_stream_event(
@@ -9416,6 +9439,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                         "content": "检测到本机网络已断开，Agent 进入沉睡状态并等待网络恢复…",
                                         "network_waiting": True,
                                         "local_network_offline": True,
+                                        "dns_unavailable": dns_unavailable,
                                         "ephemeral": True,
                                     },
                                     emit=emit,
@@ -9424,6 +9448,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 state,
                                 emit,
                                 poll_seconds=LOCAL_NETWORK_POLL_SECONDS,
+                                require_dns=dns_unavailable,
                             ):
                                 final_content = _interrupt_terminal_text(state["session_id"])
                                 break

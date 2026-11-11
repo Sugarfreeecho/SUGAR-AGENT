@@ -24,6 +24,12 @@
 - **现行为**：不再存在该阻断。预算耗尽只影响 hedge 与同模型重试，候选链按顺序继续尝试备用模型；候选全部失败时抛出最后一个候选的真实错误（保留原因链，错误卡照常分类）。
 - **依据**：`agent_harness.py::_FallbackCompletions`、`ExecutorLLMClient._stream_completion_iter`（候选循环内无预算门）；`tests/test_agent_harness_executor_session.py` 的切换-预算回归用例。
 
+### UC-1D3 本机 DNS 故障（LLM-DNS）— 2026-11 新增
+- **触发**：连接类失败发生时，本机名字解析本身不可用（现场：`getaddrinfo failed` 之后每个候选都报 `Connection error.`，四跳全灭）。
+- **预期现象**：**不逐跳切换**，直接抛出 `LocalDnsUnavailableError`（`LocalNetworkUnavailableError` 子类），Agent 进入沉睡等待；仅当**网络与 DNS 都恢复**才重跑该迭代。若只有当前候选域名解析不了而公用域名正常，则跳过同模型重试、直接换下一个候选。
+- **规则与边界**：判定分两步——先看 OS/TCP 探测（`machine_network_available`），再用真实解析探测（`LOCAL_DNS_PROBE_HOSTS`，任一可解析即视为正常）。`127.0.0.1` 与 `localhost` 候选不触发 DNS 探测（本地网关不经解析）。
+- **依据**：`agent_harness.py::is_dns_resolution_error / local_dns_available / check_local_egress / _FallbackCompletions`、`agent_loop.py::_wait_for_local_network_recovery(require_dns=…)`、`tests/test_dns_egress_gate.py`。
+
 ## 3. 边界
 
 - 切换目标**媒体能力**可能与原模型不同 → 自动触发媒体降级（见 05 / ../09-横切能力/02）。
@@ -35,9 +41,11 @@
 |---|---|
 | UC-1D1 | `agent_harness.py` `_FallbackCompletions` / `_emit_model_switch_status` |
 | UC-1D2 | 已移除（2026-10）：候选循环不再调用预算 claim，`_emit_blocked_switch_status` / `_raise_budget_exhausted_before_fallback` 已删除 |
+| UC-1D3 | `agent_harness.py` `check_local_egress` / `LocalDnsUnavailableError`；`agent_loop.py` `_wait_for_local_network_recovery` |
 
 ## 5. 版本记录
 
 - 2026-09-13 v1：拆分为独立功能（原在切换大类中，与手动切换分离）。
 - 2026-09-18 v2：对齐运行中切换修复——补熔断跳过与"手动切换清熔断"、fallback 接管改写绑定及其选择纪元守卫（见 05·UC-1E1/1E4）。
 - 2026-10 v3：移除 UC-1D2 预算阻断——模型切换只按候选链规则执行，不再消耗/受限于 hedge 与同模型重试的共享请求预算。
+- 2026-11 v4：新增 UC-1D3——DNS 解析故障识别为环境级不可用，暂停候选链并等待恢复（含 `LOCAL_DNS_PROBE_HOSTS` / `LOCAL_DNS_PROBE_TIMEOUT_SEC`）。

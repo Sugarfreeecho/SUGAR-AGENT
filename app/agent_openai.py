@@ -77,7 +77,7 @@ OPENAI_MAX_RETRIES = 4
 OPENAI_RETRY_BASE_SEC = 1.0
 OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC = 30.0
 OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES = 2
-OPENAI_TOTAL_REQUEST_BUDGET = 6
+OPENAI_TOTAL_REQUEST_BUDGET = 10
 OPENAI_TOTAL_DEADLINE_SEC = 600.0
 OPENAI_MAX_INFLIGHT_REQUESTS = 3
 
@@ -117,7 +117,7 @@ def refresh_request_recovery_config_from_env() -> None:
         ),
     )
     OPENAI_TOTAL_REQUEST_BUDGET = max(
-        1, int(os.getenv("OPENAI_TOTAL_REQUEST_BUDGET", "6"))
+        1, int(os.getenv("OPENAI_TOTAL_REQUEST_BUDGET", "10"))
     )
     OPENAI_TOTAL_DEADLINE_SEC = max(
         1.0, float(os.getenv("OPENAI_TOTAL_DEADLINE_SEC", "600"))
@@ -1019,11 +1019,8 @@ def _is_media_input_error(exc: BaseException) -> bool:
     )
 
 
-def _media_error_modalities(
-    exc: BaseException,
-    requested: set[str],
-) -> set[str]:
-    text = _exception_search_text(exc)
+def _detect_media_modalities(text: str) -> set[str]:
+    """Modalities named explicitly by a provider error; never guesses."""
     detected: set[str] = set()
     if any(value in text for value in ("image", "vision", "图片", "图像")):
         detected.add("image")
@@ -1031,8 +1028,21 @@ def _media_error_modalities(
         detected.add("audio")
     if any(value in text for value in ("video", "video_url", "视频")):
         detected.add("video")
-    if any(value in text for value in ("input_file", "file input", "文件")):
+    if any(value in text for value in ("input_file", "file input", "file_data", "文件")):
         detected.add("file")
+    return detected
+
+
+def _media_error_is_specific(exc: BaseException) -> bool:
+    """Whether the error names a modality instead of only saying "multimodal"."""
+    return bool(_detect_media_modalities(_exception_search_text(exc)))
+
+
+def _media_error_modalities(
+    exc: BaseException,
+    requested: set[str],
+) -> set[str]:
+    detected = _detect_media_modalities(_exception_search_text(exc))
     matched = detected & set(requested)
     return matched or set(requested)
 
@@ -1423,16 +1433,75 @@ def _open_raw_http_stream(
     )
 
 
+_MEDIA_PART_KINDS = {
+    "image": "image",
+    "image_url": "image",
+    "input_image": "image",
+    "input_audio": "audio",
+    "video_url": "video",
+    "file": "file",
+    "input_file": "file",
+}
+_MEDIA_DATA_KINDS = {"image": "image", "audio": "audio", "video": "video"}
+
+
+def _part_media_kind(part: Any) -> str:
+    """Classify one content part by modality; '' means it carries no media."""
+    if not isinstance(part, dict):
+        return ""
+    return _MEDIA_PART_KINDS.get(str(part.get("type") or "").strip().lower(), "")
+
+
+def _file_part_media_kind(part: Dict[str, Any]) -> str:
+    """A generic file part still declares what it carries through its data URL."""
+    value = part.get("file") if isinstance(part.get("file"), dict) else part
+    data = str(value.get("file_data") or "")
+    match = re.match(r"data:([a-z0-9.+-]+)/", data, re.IGNORECASE)
+    return _MEDIA_DATA_KINDS.get((match.group(1) if match else "").lower(), "file")
+
+
+def _file_part_hint(part: Dict[str, Any]) -> str:
+    """Name, size and MIME of an inlined file, so a placeholder stays actionable."""
+    value = part.get("file") if isinstance(part.get("file"), dict) else part
+    name = str(value.get("filename") or "")
+    data = str(value.get("file_data") or "")
+    match = re.match(r"data:([^;]+);base64,([A-Za-z0-9+/=]*)", data)
+    mime = match.group(1) if match else ""
+    size = (len(match.group(2)) * 3 // 4) if match else 0
+    details = ", ".join(item for item in (name, f"{size} bytes" if size else "", mime) if item)
+    return f" ({details})" if details else ""
+
+
+_HANDLE_ID_RE = re.compile(r"sha256:[a-f0-9]{64}")
+_HANDLE_PATH_RE = re.compile(r'"((?:[A-Za-z]:[\\/]|\\\\|/|\.{1,2}[\\/])[^"]*)"')
+_HANDLE_MARKERS = ("归一化副本", "Normalized copy", "请求预览", "request preview")
+
+
+def _recover_handle(text: str) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """Recover the attachment ref and normalized path from a projected image handle."""
+    text = str(text or "")
+    identities = _HANDLE_ID_RE.findall(text)
+    if not identities or not any(marker in text for marker in _HANDLE_MARKERS):
+        # Never claim an unrelated sha256 (tool output, user prose) as a handle.
+        return None, None
+    path = None
+    for match in _HANDLE_PATH_RE.finditer(text):
+        candidate = match.group(1)
+        if _media_kind_for_path(candidate) != "image":
+            continue
+        try:
+            path = json.loads('"%s"' % candidate)
+        except ValueError:
+            path = candidate.replace("\\\\", "\\")
+    return {"attachmentId": identities[-1]}, path
+
+
 def _api_messages_have_media(api_messages: List[Dict[str, Any]]) -> bool:
     for message in api_messages:
         content = message.get("content")
         if not isinstance(content, list):
             continue
-        if any(
-            isinstance(part, dict)
-            and part.get("type") in ("image", "image_url", "video_url", "input_audio", "file", "input_file")
-            for part in content
-        ):
+        if any(_part_media_kind(part) for part in content):
             return True
     return False
 
@@ -1446,56 +1515,90 @@ def _api_messages_required_modalities(
         if not isinstance(content, list):
             continue
         for part in content:
-            if not isinstance(part, dict):
+            kind = _part_media_kind(part)
+            if not kind:
                 continue
-            part_type = str(part.get("type") or "").strip().lower()
-            if part_type in {"image", "image_url", "input_image"}:
-                required.add("image")
-            elif part_type == "input_audio":
-                required.add("audio")
-            elif part_type == "video_url":
-                required.add("video")
-            elif part_type in {"input_file", "file"}:
-                required.add("file")
+            required.add(_file_part_media_kind(part) if kind == "file" else kind)
     return required
 
 
-def _strip_media_from_api_messages(api_messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Project rejected media to text; each image occurrence gets its own placeholder."""
-    from attachments.messages_text import text_only_image_text
+def _strip_media_from_api_messages(
+    api_messages: List[Dict[str, Any]],
+    modalities: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Project rejected media to text and leave accepted media untouched.
+
+    ``modalities=None`` strips every media kind.  A placeholder always keeps a
+    resolvable reference (normalized path, URL, file name and MIME), so the
+    omitted content can still be read with file tools or delegated.
+    """
+    from attachments.messages_text import request_omitted_image_text
     from attachments import prompt_language
-    cleaned = []
+
+    language = prompt_language()
+    target = set(modalities) if modalities else None
+    cleaned: List[Dict[str, Any]] = []
     for message in api_messages:
         content = message.get("content")
         if not isinstance(content, list):
             cleaned.append(message)
             continue
-        text_parts = []
+        text_parts: List[str] = []
+        kept_parts: List[Dict[str, Any]] = []
+        stripped = False
         for part in content:
             if not isinstance(part, dict):
                 continue
-            kind = part.get("type")
-            if kind == "text":
-                text_parts.append(str(part.get("text") or ""))
-            elif kind in {"image", "image_url", "input_image"}:
-                ref = part.get("attachment")
-                if not ref:
-                    identities = re.findall(r"sha256:[a-f0-9]{64}", " ".join(text_parts))
-                    ref = {"attachmentId": identities[-1]} if identities else None
-                if ref:
-                    text_parts.append(text_only_image_text(ref, prompt_language()))
+            kind = _part_media_kind(part)
+            if kind == "file":
+                kind = _file_part_media_kind(part)
+            if not kind:
+                if str(part.get("type") or "").strip().lower() == "text":
+                    text_parts.append(str(part.get("text") or ""))
                 else:
-                    value = part.get("image_url") or {}
-                    url = str(value.get("url") if isinstance(value, dict) else value)
-                    original = f"; original URL: {url}" if url.startswith(("http://", "https://")) else ""
-                    text_parts.append("[image omitted because this model does not declare image input" + original + "]")
-            elif kind in {"video_url", "input_audio", "file", "input_file"}:
-                text_parts.append("[该消息包含音频/视频/文件，但当前模型不支持，已用此文本占位]")
+                    kept_parts.append(part)
+                continue
+            if target is not None and kind not in target:
+                kept_parts.append(part)
+                continue
+            stripped = True
+            if kind == "image":
+                ref = part.get("attachment")
+                path = None
+                if not isinstance(ref, dict) and text_parts:
+                    # project_request_images emits a handle immediately before the
+                    # payload; reuse it instead of guessing across the whole message.
+                    ref, path = _recover_handle(text_parts[-1])
+                    if isinstance(ref, dict):
+                        text_parts.pop()
+                if isinstance(ref, dict):
+                    text_parts.append(request_omitted_image_text(ref, path, language))
+                    continue
+                value = part.get("image_url") or {}
+                url = str(value.get("url") if isinstance(value, dict) else value)
+                original = f"; original URL: {url}" if url.startswith(("http://", "https://")) else ""
+                text_parts.append("[image omitted because this model does not declare image input" + original + "]")
+            elif kind == "video":
+                text_parts.append("[该消息包含视频，但当前模型不支持，已用此文本占位]")
                 value = part.get("video_url") or {}
                 url = str(value.get("url") if isinstance(value, dict) else value)
                 if url.startswith(("http://", "https://")):
                     text_parts.append(url)
-        cleaned.append({**message, "content": " ".join(text_parts).strip()})
+            elif kind == "audio":
+                text_parts.append("[该消息包含音频，但当前模型不支持，已用此文本占位]")
+            else:
+                text_parts.append(
+                    "[该消息包含文件，但当前模型不支持，已用此文本占位]" + _file_part_hint(part)
+                )
+        if not stripped and kept_parts:
+            cleaned.append(message)
+            continue
+        joined = " ".join(item for item in text_parts if item).strip()
+        if kept_parts:
+            merged: List[Dict[str, Any]] = [{"type": "text", "text": joined}] if joined else []
+            cleaned.append({**message, "content": merged + kept_parts})
+        else:
+            cleaned.append({**message, "content": joined})
     return cleaned
 
 def _inject_non_image_fallback_instruction(
@@ -1541,14 +1644,20 @@ def _inject_non_image_fallback_instruction(
 
 def _serialized_messages_to_text_only(
     api_messages: List[Dict[str, Any]],
+    rejected: Optional[set[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Strip serialized media while preserving adjacent local-path text."""
-    if not _api_messages_have_media(api_messages):
-        return api_messages
+    """Strip the rejected modalities and keep every accepted one on the wire.
+
+    ``rejected`` narrows the projection to the modalities the target model
+    cannot read; ``None`` keeps the legacy "strip all media" behaviour.
+    """
     required_modalities = _api_messages_required_modalities(api_messages)
+    target = (required_modalities & set(rejected)) if rejected else required_modalities
+    if not target:
+        return api_messages
     return _inject_non_image_fallback_instruction(
-        _strip_media_from_api_messages(api_messages),
-        required_modalities,
+        _strip_media_from_api_messages(api_messages, target),
+        target - {"image"},
     )
 
 
@@ -1580,6 +1689,23 @@ def _text_only_media_part(local_path: str) -> Dict[str, str]:
     return {"type": "text", "text": '%s"%s"' % (label, local_path)}
 
 
+def _local_file_reference_text(local_path: str, kind: str = "") -> Dict[str, str]:
+    """Text stand-in for a local file that is not sent as a media part.
+
+    Keeps an absolute, quoted path so the model can read the file with file
+    tools or hand it to a capable sub-agent; never fabricates a media part the
+    target model cannot decode.
+    """
+    # Plain quoting keeps Windows separators copy-pasteable into a tool call or
+    # a sub-agent prompt; JSON escaping would double every backslash.
+    quoted = f'"{local_path}"'
+    if kind == "image":
+        text = f"[图片未接入本次请求：{quoted}（只读；需要识别时用文件工具或委派支持图片输入的模型）]"
+    else:
+        text = f"[本地文件：{quoted}（只读；需要内容时用文件工具读取）]"
+    return {"type": "text", "text": text}
+
+
 def messages_to_openai_params(
     messages: List[Any],
     *,
@@ -1588,6 +1714,7 @@ def messages_to_openai_params(
     native_tool_images: bool = False,
     defer_images: bool = False,
     image_enabled: Optional[bool] = None,
+    file_enabled: bool = False,
     client: Any = None,
     language: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -1654,32 +1781,41 @@ def messages_to_openai_params(
                         if local_path not in seen_text:
                             content_parts.append(_text_only_media_part(local_path))
                         continue
-                    expanded_local = _expand_local_media_paths_in_text(
-                        json.dumps(local_path, ensure_ascii=False)
-                    )
+                    # Pass the raw path: json.dumps used to double Windows
+                    # separators, so every local path failed the exists() probe
+                    # and fell through to the generic file branch.
+                    expanded_local = _expand_local_media_paths_in_text(local_path)
                     if isinstance(expanded_local, list):
                         content_parts.extend(
                             part
                             for part in expanded_local
                             if isinstance(part, dict) and part.get("type") != "text"
                         )
-                    else:
-                        path = Path(local_path).expanduser()
-                        try:
-                            if path.is_file() and path.stat().st_size <= _MAX_INLINE_MEDIA_BYTES:
-                                mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-                                encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-                                content_parts.append({
-                                    "type": "file",
-                                    "file": {
-                                        "filename": path.name,
-                                        "file_data": f"data:{mime};base64,{encoded}",
-                                    },
-                                })
-                            else:
-                                content_parts.append({"type": "text", "text": local_path})
-                        except OSError:
-                            content_parts.append({"type": "text", "text": local_path})
+                        continue
+                    kind = _media_kind_for_path(local_path)
+                    path = Path(local_path).expanduser()
+                    if kind == "image" or not file_enabled:
+                        # A png that reached this point was not admitted as an
+                        # image; sending it as a generic file part made the
+                        # request require "file" input and got the whole message
+                        # degraded. Reference it as text instead.
+                        content_parts.append(_local_file_reference_text(local_path, kind))
+                        continue
+                    try:
+                        if path.is_file() and path.stat().st_size <= _MAX_INLINE_MEDIA_BYTES:
+                            mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                            content_parts.append({
+                                "type": "file",
+                                "file": {
+                                    "filename": path.name,
+                                    "file_data": f"data:{mime};base64,{encoded}",
+                                },
+                            })
+                        else:
+                            content_parts.append(_local_file_reference_text(local_path, kind))
+                    except OSError:
+                        content_parts.append(_local_file_reference_text(local_path, kind))
                 api_msgs.append({"role": "user", "content": content_parts})
             elif isinstance(m.content, str):
                 content = (
@@ -1932,7 +2068,7 @@ def _messages_to_params_for_client(
         messages, expand_media_paths=bool(modalities - {"text"}), thinking_format=fmt,
         native_tool_images=bool(getattr(client, "_myagent_transport_enabled", False)),
         defer_images=bool(getattr(client, "_myagent_transport_enabled", False)),
-        image_enabled="image" in modalities, client=client,
+        image_enabled="image" in modalities, file_enabled="file" in modalities, client=client,
         language=getattr(client, "_myagent_prompt_language", None),
     )
     if str(getattr(client, "_myagent_system_prompt_mode", "preserve") or "").lower() == "merge":
@@ -1941,7 +2077,7 @@ def _messages_to_params_for_client(
         return serialized
     missing = _api_messages_required_modalities(serialized) - modalities
     if missing:
-        return _serialized_messages_to_text_only(serialized)
+        return _serialized_messages_to_text_only(serialized, rejected=missing)
     if modalities <= {"text"}:
         return _strip_media_from_api_messages(serialized)
     return serialized

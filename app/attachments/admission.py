@@ -1,5 +1,6 @@
 """Explicit message-level admission: gather first, commit once, preserve order."""
 import asyncio
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,10 @@ from .errors import AttachmentError
 from .remote import RemoteImagePolicy, download_image
 from .store import AttachmentStore
 from .types import SaveImageAttachment
+
+logger = logging.getLogger(__name__)
+
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
 
 REMOTE_IMAGE_RE = re.compile(
     r'!\[[^\]]*\]\((?P<markdown>https?://[^\s)]+)\)'
@@ -198,8 +203,29 @@ def admit_content(content, context, *, scan_paths=False, scan_remote=False, stri
                                 out.append(path_part(path))
                 elif kind == "local_file":
                     local = block.get("local_file")
-                    path = str(local.get("path") if isinstance(local, dict) else local or block.get("path") or "")
-                    out.append(path_part(path) if Path(path).is_file() and Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"} else block)
+                    raw_path = local.get("path") if isinstance(local, dict) else local
+                    path = str(raw_path or block.get("path") or "").strip().strip('"').strip("'")
+                    image_like = path.lower().endswith(tuple(IMAGE_SUFFIXES))
+                    if image_like:
+                        try:
+                            usable = Path(path).expanduser().is_file()
+                        except OSError:
+                            usable = False
+                        if usable:
+                            out.append(path_part(Path(path).expanduser()))
+                            continue
+                        # Silent downgrade here used to surface as a generic
+                        # "file" part downstream, which made the whole request
+                        # require file input and dropped every real image.
+                        logger.warning(
+                            "local_file 图片未能接入请求（路径不存在或不是普通文件）: %s", path
+                        )
+                    normalized = {**block}
+                    if isinstance(local, dict):
+                        normalized["local_file"] = {**local, "path": path}
+                    else:
+                        normalized["local_file"] = {"path": path}
+                    out.append(normalized)
                 elif kind in {"image_url", "input_image"}:
                     value = block.get("image_url") or ""
                     url = value.get("url", "") if isinstance(value, dict) else value

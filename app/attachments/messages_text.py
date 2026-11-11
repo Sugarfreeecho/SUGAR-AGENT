@@ -24,6 +24,27 @@ def text_only_image_text(ref, language="en"):
             else f"[图片已省略，因为此模型不接受图片输入；附件 {digest}]")
 
 
+def request_omitted_image_text(ref, path=None, language="en"):
+    """Placeholder for an image dropped from *this* request, not from the model.
+
+    Keeps the normalized copy path so the caller can still read or delegate the
+    image instead of losing the only reference to it.
+    """
+    digest = ref["attachmentId"][:15]
+    location = ""
+    if path:
+        # Plain quoting, not JSON escaping: the model copies this path into a
+        # tool call or a sub-agent prompt, where doubled separators do not resolve.
+        location = (f'; normalized copy (read-only): "{path}"'
+                    if language == "en" else
+                    f'；归一化副本（只读）："{path}"')
+    if language == "en":
+        return (f"[image not sent with this request: the model does not accept image input; "
+                f"attachment {digest}{location}; delegate to a vision model with the task tool if the content matters]")
+    return (f"[图片未随本次请求发送：该模型不支持图片输入；附件 {digest}{location}；"
+            "如需识别图片内容，请用 task 委派给支持图片的模型]")
+
+
 def offloaded_image_text(ref, path, language="en"):
     prefix = "image omitted to fit request image limits" if language == "en" else "为满足请求图片限制，已省略图片"
     return f"[{prefix}; {_identity(ref)}." + _access(ref, path, language) + "]"
