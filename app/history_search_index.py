@@ -13,11 +13,11 @@ import threading
 from file_read_signature import signature, stat_signature
 
 
-_VERSION = 1
+_VERSION = 2
 logger = logging.getLogger(__name__)
 _guard = threading.Lock()
 _pending = set()
-_queue = queue.Queue(maxsize=8)
+_queue = queue.Queue(maxsize=64)
 _worker = None
 
 
@@ -55,7 +55,8 @@ def _update(db, path, render):
             raise ValueError('unknown history source identity')
         before = list(opened)
         if meta.get('version') == _VERSION and meta.get('signature') == before:
-            return before
+            return {'stamp': before, 'docs': int(meta.get('docs') or 0),
+                    'snapshot': bool(meta.get('snapshot'))}
         offset = int(meta.get('offset', 0))
         compatible = (meta.get('version') == _VERSION and before[1] != 0
                       and meta.get('signature', [])[:2] == before[:2]
@@ -68,6 +69,11 @@ def _update(db, path, render):
             source.seek(0)
             offset = 0
             digest = hashlib.sha256()
+            docs = 0
+            snapshot = False
+        else:
+            docs = int(meta.get('docs') or 0)
+            snapshot = bool(meta.get('snapshot'))
         # Binary byte accounting avoids a Windows file-position syscall (and
         # GIL handoff) for every JSONL row during background projection.
         while offset < before[2]:
@@ -83,18 +89,23 @@ def _update(db, path, render):
                     continue
             except (ValueError, TypeError):
                 continue
+            if str(value.get('type') or '') == 'runtime_snapshot_compacted':
+                # Its dialogue lives inside one payload; per-line rows cannot
+                # serve it, so the raw scan keeps that responsibility.
+                snapshot = True
             ref, content = render(value)
             if content:
                 db.execute('INSERT OR REPLACE INTO rows VALUES(?,?,?,?,?)',
                            (start, offset, str(ref), content, content.casefold()))
+                docs += 1
         # Do not publish a projection of a source replaced/rewritten mid-read.
         if list(signature(source) or ()) != before or _signature(path.stat()) != before[:5]:
             raise ValueError('history source changed during indexing')
         db.execute('INSERT OR REPLACE INTO meta VALUES(1,?)', (json.dumps({
             'version': _VERSION, 'signature': before, 'offset': offset,
-            'digest': digest.hexdigest(),
+            'digest': digest.hexdigest(), 'docs': docs, 'snapshot': snapshot,
         }),))
-        return before
+        return {'stamp': before, 'docs': docs, 'snapshot': snapshot}
 
 
 def _connect(path):
@@ -131,7 +142,7 @@ def schedule(path, render):
 
     key = str(path)
     with _guard:
-        if key in _pending or len(_pending) >= 8:
+        if key in _pending or len(_pending) >= 64:
             return
         _pending.add(key)
         try:
@@ -158,6 +169,26 @@ def _work():
             _queue.task_done()
 
 
+def gc(root) -> int:
+    """Drop projections whose source file no longer exists."""
+    removed = 0
+    for db in Path(root).glob('*/.history-search/*.sqlite3'):
+        source = db.parent.parent / db.name[:-len('.sqlite3')]
+        if source.is_file():
+            continue
+        try:
+            db.unlink()
+            removed += 1
+        except OSError:
+            continue
+        try:
+            if not any(db.parent.iterdir()):
+                db.parent.rmdir()
+        except OSError:
+            pass
+    return removed
+
+
 def search(path: Path, terms: list[str], render, *, limit: int, seen: set[str]):
     """Return cached matches, or None to use the original streaming search.
 
@@ -169,7 +200,12 @@ def search(path: Path, terms: list[str], render, *, limit: int, seen: set[str]):
         return None
     try:
         with closing(_connect(path)) as db, db:
-            stamp = _update(db, path, render)
+            state = _update(db, path, render)
+            if state['snapshot'] or state['docs'] == 0:
+                # An empty projection must never masquerade as "no matches":
+                # the raw scan is the only authority for such sources.
+                return None
+            stamp = state['stamp']
             rows = db.execute(
                 'SELECT offset,end_offset,ref,content FROM rows WHERE '
                 + ' AND '.join('instr(folded,?)>0' for _ in terms) + ' ORDER BY offset', terms,
@@ -184,12 +220,27 @@ def search(path: Path, terms: list[str], render, *, limit: int, seen: set[str]):
                     if key in dedup:
                         continue
                     source.seek(start)
-                    raw = source.read(end - start).decode('utf-8', errors='replace').casefold()
-                    if all(term in raw for term in terms):
-                        result.append((ref, content))
-                        dedup.add(key)
-                        if len(result) >= limit:
-                            break
+                    raw = source.read(end - start).decode('utf-8', errors='replace')
+                    if not all(term in raw.casefold() for term in terms):
+                        continue
+                    # Re-render from the raw line so a stale projection can
+                    # never return outdated text or a moved ref.
+                    try:
+                        value = json.loads(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if not isinstance(value, dict):
+                        continue
+                    fresh_ref, fresh = render(value)
+                    if not fresh or not all(term in fresh.casefold() for term in terms):
+                        continue
+                    fresh_key = ' '.join(fresh.split()).casefold()
+                    if fresh_key in dedup:
+                        continue
+                    result.append((str(fresh_ref), fresh))
+                    dedup.add(fresh_key)
+                    if len(result) >= limit:
+                        break
                 if list(signature(source) or ()) != stamp or _signature(path.stat()) != stamp[:5]:
                     return None
         return result

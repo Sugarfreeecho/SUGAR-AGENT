@@ -26,21 +26,19 @@ def _digest(value):
 
 def _text(value):
     # Rich content contributes text blocks only, not attachment/internal JSON.
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        return "\n".join(_text(v.get("text", "")) for v in value
-                         if isinstance(v, dict) and v.get("type") in {"text", "input_text", "output_text"})
-    return ""
+    if not isinstance(value, (str, list)):
+        return ""
+    from session_corpus import text_of
+
+    return text_of(value)
 
 
 def _reply(value):
     text = _text(value)
     # Match the chat renderer: think tags inside code are literal examples.
-    pieces = re.split(r"(```[\s\S]*?```|`[^`]*`)", text)
-    return "".join(part if i % 2 else re.sub(r"</think>", "", re.sub(
-        r"<think>[\s\S]*?(?:</think>|$)", "", part, flags=re.I), flags=re.I)
-        for i, part in enumerate(pieces))
+    from session_corpus import strip_think
+
+    return strip_think(text)
 
 
 def _ranges(text, terms):
@@ -112,6 +110,13 @@ class SessionSearch:
             try:
                 db = sqlite3.connect(self.path, check_same_thread=False, timeout=2)
                 db.execute("PRAGMA journal_mode=WAL")
+                # A previous process can leave a large WAL behind; bound future
+                # growth and reclaim it while this process is the only writer.
+                db.execute("PRAGMA wal_autocheckpoint=4000")
+                try:
+                    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.OperationalError:
+                    pass
                 db.execute("CREATE TABLE IF NOT EXISTS sources(sid TEXT PRIMARY KEY, version TEXT NOT NULL)")
                 db.execute("CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, sid TEXT, ref TEXT, role TEXT, "
                            "content TEXT, folded TEXT, ui_index INTEGER, turn_index INTEGER, version TEXT)")
@@ -140,6 +145,12 @@ class SessionSearch:
             self.worker.join(timeout=.5)
         with self.lock:
             if self.db:
+                try:
+                    # A long-lived reader can leave a large WAL behind; reclaim
+                    # it on shutdown because the index is rebuildable anyway.
+                    self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.Error:
+                    pass
                 self.db.close()
                 self.db = None
 
@@ -189,7 +200,9 @@ class SessionSearch:
                     self.work.put(sid)
 
     def _maintain(self):
-        next_audit = time.monotonic() + 30
+        # Stat-only audits over every session are cheap but not free; live
+        # edits already invalidate() the affected session directly.
+        next_audit = time.monotonic() + 300
         while not self.maintenance_stop.is_set():
             try:
                 sid = self.work.get(timeout=1)
@@ -199,7 +212,12 @@ class SessionSearch:
                         self._audit_sources()
                     except Exception:
                         pass
-                    next_audit = time.monotonic() + 30
+                    with self.lock:
+                        try:
+                            self._connect().execute("PRAGMA wal_checkpoint(PASSIVE)")
+                        except sqlite3.Error:
+                            pass
+                    next_audit = time.monotonic() + 300
                 continue
             if sid is None:
                 self.work.task_done()

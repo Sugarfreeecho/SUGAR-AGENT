@@ -139,10 +139,39 @@ if __name__ == "__main__":
                     "Startup observability reconciliation completed: orphaned=%s elapsed_ms=%d",
                     len(orphaned), int((time.perf_counter() - started_at) * 1000),
                 )
+                # A graceful shutdown clears the run fence, so the fence scan
+                # cannot see those interrupted runs. The reconciler can, and
+                # it already paid the only full sweep of the session library.
+                if orphaned:
+                    try:
+                        from webui import recover_orphaned_sessions
+
+                        await recover_orphaned_sessions(
+                            {str(item.get("session_id") or "") for item in orphaned
+                             if isinstance(item, dict)}
+                        )
+                    except Exception:
+                        logging.getLogger(__name__).warning(
+                            "Orphan-fed ReAct recovery failed", exc_info=True
+                        )
             except Exception:
                 logging.getLogger(__name__).exception("Startup observability reconciliation failed")
 
         observability_reconcile_task = asyncio.create_task(reconcile_observability_in_background())
+
+        async def warm_history_index() -> None:
+            # Rebuildable caches only; failures must never affect startup.
+            try:
+                from history_global_index import gc, warm_recent
+
+                root = session_manager.sessions_dir
+                await asyncio.to_thread(gc, root)
+                queued = await asyncio.to_thread(warm_recent, root)
+                logging.getLogger(__name__).info("history index warm queued=%s", queued)
+            except Exception:
+                logging.getLogger(__name__).debug("history index warm skipped", exc_info=True)
+
+        history_warm_task = asyncio.create_task(warm_history_index())
 
         watchdog_stop = asyncio.Event()
 

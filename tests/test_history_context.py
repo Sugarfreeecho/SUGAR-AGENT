@@ -228,3 +228,148 @@ def test_history_context_is_registered_as_read_only_host_tool():
     policy = host_tool_invokers.policy("history_context")
     assert policy.effect == "read"
     assert policy.parallel_safe is True
+
+
+def test_history_context_searches_compacted_snapshot_rows(tmp_path):
+    from history_context import history_context
+
+    manager = _SessionManager(tmp_path)
+    session_id = str(uuid.uuid4())
+    session_dir = manager._resolve_session_path(session_id)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    events = [
+        {
+            "schema_version": 1,
+            "seq": 1,
+            "type": "message_user",
+            "session_id": session_id,
+            "payload": {"content": "live row"},
+        },
+        {
+            "schema_version": 1,
+            "seq": 2,
+            "type": "runtime_snapshot_compacted",
+            "session_id": session_id,
+            "payload": {
+                "snapshot": {},
+                "ui_events": [
+                    {"type": "user", "content": "snapshot needle question"},
+                    {"type": "final", "content": "snapshot needle answer"},
+                    {"type": "tool_call", "tool": "read_file", "args": {"path": "x"}},
+                ],
+            },
+        },
+    ]
+    (session_dir / "events.jsonl").write_text(
+        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+        encoding="utf-8",
+    )
+
+    result = history_context(
+        manager, session_id, action="search", scope="current", query="snapshot needle"
+    )
+
+    assert [item["content"] for item in result["results"]] == [
+        "用户：snapshot needle question",
+        "助手：snapshot needle answer",
+    ]
+    ref = result["results"][0]["ref"]
+    assert ref == f"history:{session_id}:event:2:ui:0"
+    read = history_context(manager, session_id, action="read", scope="current", ref=ref)
+    assert read == {"content": "用户：snapshot needle question"}
+
+    tool = history_context(
+        manager, session_id, action="search", scope="current", query="read_file"
+    )
+    assert tool["results"][0]["content"].startswith("工具结果（工具=read_file）：")
+
+
+def test_file_prefilter_sees_terms_across_chunk_boundaries(tmp_path, monkeypatch):
+    import history_context
+
+    monkeypatch.setattr(history_context, "_SCAN_CHUNK", 8)
+    path = tmp_path / "events.jsonl"
+    path.write_bytes(b'{"a":1}\n1234567890needle\n')
+
+    assert history_context._file_may_contain(path, ["needle"]) is True
+    assert history_context._file_may_contain(path, ["needle", "absent"]) is False
+
+
+def test_global_search_uses_the_cross_session_index(tmp_path):
+    import history_global_index
+    from history_context import _render_event_row, history_context
+
+    manager = _SessionManager(tmp_path)
+    session_ids = []
+    for index in range(9):
+        session_id = str(uuid.uuid4())
+        _write_event(manager, session_id, 1, f"session {index} needle")
+        session_ids.append(session_id)
+        path = manager._resolve_session_path(session_id) / "events.jsonl"
+        history_global_index._build(tmp_path, path, _render_event_row)
+
+    result = history_context(
+        manager, session_ids[0], action="search", scope="global", query="needle", limit=5
+    )
+
+    assert len(result["results"]) == 5
+    assert all("session_id" in item for item in result["results"])
+
+
+def test_current_scope_reads_compacted_rows_from_the_global_index(tmp_path):
+    import history_global_index
+    from history_context import _render_event_row, _ui_row_text, history_context
+
+    manager = _SessionManager(tmp_path)
+    session_id = str(uuid.uuid4())
+    session_dir = manager._resolve_session_path(session_id)
+    session_dir.mkdir(parents=True)
+    (session_dir / "events.jsonl").write_text(
+        json.dumps({
+            "seq": 1,
+            "type": "runtime_snapshot_compacted",
+            "payload": {"ui_events": [{"type": "user", "content": "indexed snapshot needle"}]},
+        }, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    history_global_index._build(
+        tmp_path, session_dir / "events.jsonl", _render_event_row, _ui_row_text
+    )
+
+    result = history_context(
+        manager, session_id, action="search", scope="current", query="snapshot needle"
+    )
+
+    assert len(result["results"]) == 1
+    assert result["results"][0]["ref"].endswith(":ui:0")
+
+
+def test_archives_are_indexed_and_readable_through_the_same_index(tmp_path):
+    import history_global_index
+    from history_context import _archive_renderer, history_context
+
+    manager = _SessionManager(tmp_path)
+    session_id = str(uuid.uuid4())
+    session_dir = manager._resolve_session_path(session_id)
+    archive_dir = session_dir / "history_context_archives"
+    archive_dir.mkdir(parents=True)
+    archive_id = "20260101T000000000000Z-abc"
+    archive = archive_dir / f"{archive_id}.jsonl"
+    archive.write_text(
+        json.dumps(
+            {"kind": "message", "item_id": "m000001", "role": "user", "content": "archived needle"},
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    history_global_index._build(tmp_path, archive, _archive_renderer(archive), None)
+
+    result = history_context(
+        manager, session_id, action="search", scope="current", query="archived needle"
+    )
+
+    assert len(result["results"]) == 1
+    ref = result["results"][0]["ref"]
+    assert ref == f"history:{session_id}:archive:{archive_id}:item:m000001"
+    read = history_context(manager, session_id, action="read", scope="current", ref=ref)
+    assert read == {"content": "用户：archived needle"}

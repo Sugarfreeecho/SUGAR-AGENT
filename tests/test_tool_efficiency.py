@@ -433,11 +433,10 @@ def test_todo_concurrent_updates_commit_in_order(monkeypatch):
     assert manager._by_session['s'] == [{'text': 'second'}]
 
 
-def test_history_global_precomputation_starts_after_foreground_scan_and_corrupt_cache_falls_back(tmp_path, monkeypatch):
+def test_history_global_search_survives_a_corrupt_index(tmp_path):
     import json
     import uuid
     import history_context as history
-    import history_search_index as index
 
     ids = [str(uuid.uuid4()), str(uuid.uuid4())]
     for sid in ids:
@@ -448,23 +447,9 @@ def test_history_global_precomputation_starts_after_foreground_scan_and_corrupt_
         }) + '\n', encoding='utf-8')
     manager = SimpleNamespace(sessions_dir=tmp_path, _normalize_session_id=lambda sid: sid,
                               _resolve_session_path=lambda sid: tmp_path / sid)
-    scanned, scheduled = [], []
-    original = history._matching_jsonl
-
-    def scan(path, terms):
-        assert not scheduled
-        scanned.append(path)
-        yield from original(path, terms)
-
-    monkeypatch.setattr(history, '_matching_jsonl', scan)
-    monkeypatch.setattr(index, 'schedule', lambda path, render: scheduled.append(path))
-    assert history.history_context(manager, ids[0], scope='global', query='absent')['results'] == []
-    assert len(scanned) == 2 and set(scanned) == set(scheduled)
     # A damaged derived database cannot prevent semantic access to the facts.
-    scheduled.clear()
-    path = tmp_path / ids[0] / 'events.jsonl'
-    index._db_path(path).parent.mkdir()
-    index._db_path(path).write_bytes(b'broken sqlite cache')
-    assert history.history_context(manager, ids[0], query='unique')['results'][0]['content'] == '用户：unique-' + ids[0]
-    index._build(path, lambda row: (str(row['seq']), history._clean_event_text(row)))
-    assert not index._db_path(path).exists()
+    (tmp_path / '.history-search-global.sqlite3').write_bytes(b'broken sqlite cache')
+
+    assert history.history_context(manager, ids[0], scope='global', query='absent')['results'] == []
+    hit = history.history_context(manager, ids[0], scope='global', query='unique-' + ids[1])
+    assert hit['results'] and hit['results'][0]['session_id'] == ids[1]

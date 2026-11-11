@@ -8,8 +8,10 @@ provides bounded search/read operations across those archives and Runtime V2
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +25,7 @@ _ARCHIVE_LOCK = threading.RLock()
 _REF_RE = re.compile(
     r"^history:(?P<session>[0-9a-fA-F-]{32,36}):"
     r"(?:(?:archive:(?P<archive>[A-Za-z0-9_.-]+)(?::item:(?P<item>[A-Za-z0-9_.-]+))?)|"
-    r"(?:event:(?P<seq>\d+)))$"
+    r"(?:event:(?P<seq>\d+)(?::ui:(?P<ui>\d+))?))$"
 )
 
 
@@ -252,6 +254,33 @@ def _clean_event_text(event: Mapping[str, Any]) -> str:
     return f"{label}{suffix}：{text}" if text else f"{label}{suffix}"
 
 
+def _ui_text(value: Any) -> str:
+    """Extract display text; rules live in the shared corpus module."""
+    from session_corpus import text_of
+
+    return text_of(value)
+
+
+def _ui_row_text(row: Mapping[str, Any]) -> str:
+    """Render one retained UI row; identical rules in both search corpora."""
+    from session_corpus import ui_row_text
+
+    return ui_row_text(row, labelled=True)
+
+
+def _snapshot_ui_rows(event: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Return retained UI rows of a compacted session snapshot."""
+    if str(event.get("type") or "") != "runtime_snapshot_compacted":
+        return []
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return []
+    rows = payload.get("ui_events")
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, Mapping)]
+
+
 def active_excerpt(archive: Mapping[str, Any], *, max_chars: int = 8_000) -> str:
     """Render a chronological excerpt with durable refs for omitted fields."""
     entries: list[dict[str, Any]] = []
@@ -329,17 +358,23 @@ def _session_dirs(session_manager: Any, current_session_id: str, scope: str) -> 
     root = Path(session_manager.sessions_dir).resolve()
     found: list[tuple[str, Path, int]] = []
     try:
-        candidates = root.rglob("events.jsonl")
-        for event_path in candidates:
-            session_dir = event_path.parent.resolve()
-            sid = session_dir.name
-            try:
-                session_manager._normalize_session_id(sid)
-                session_dir.relative_to(root)
-                stamp = int(event_path.stat().st_mtime_ns)
-            except (AttributeError, OSError, ValueError):
-                continue
-            found.append((sid, session_dir, stamp))
+        # Sessions live one level below the root. A scandir walk plus the
+        # cached stat avoids the per-file resolve()/stat() cost of rglob,
+        # which dominated global queries on large libraries.
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if not entry.is_dir():
+                    continue
+                sid = entry.name
+                try:
+                    session_manager._normalize_session_id(sid)
+                    event_path = Path(entry.path) / "events.jsonl"
+                    if not event_path.is_file():
+                        continue
+                    stamp = int(event_path.stat().st_mtime_ns)
+                except (AttributeError, OSError, ValueError):
+                    continue
+                found.append((sid, Path(entry.path), stamp))
     except OSError:
         pass
     if not any(sid == current_session_id for sid, _path, _stamp in found):
@@ -399,21 +434,167 @@ def _matching_jsonl(path: Path, terms: list[str]) -> Iterable[tuple[dict[str, An
         return
 
 
-def _search_candidates(path, terms, render, remaining, seen, precompute):
-    from history_search_index import search
+_SCAN_CHUNK = 4 * 1024 * 1024
 
-    cached = search(path, terms, render, limit=remaining, seen=seen)
-    if cached is not None:
-        yield from cached
+
+def _file_may_contain(path: Path, terms: list[str]) -> bool:
+    """Reject a whole file without a per-line Python loop.
+
+    Only presence matters here: a term missing from the entire file cannot
+    match any line.  Chunk overlap keeps terms that straddle a boundary.
+    """
+    lowered = [term.lower().encode("ascii") for term in terms if term.isascii()]
+    literal = [term.encode("utf-8") for term in terms
+               if not term.isascii() and term == term.casefold()]
+    if any(not term.isascii() and term != term.casefold() for term in terms):
+        return True  # Needs decoded casefolding; the line scan decides.
+    pending = set(range(len(lowered))) | set(range(len(lowered), len(lowered) + len(literal)))
+    lowered_index = {index: term for index, term in enumerate(lowered)}
+    literal_index = {len(lowered) + index: term for index, term in enumerate(literal)}
+    overlap = max([len(term) for term in lowered + literal] or [1]) - 1
+    tail = b""
+    try:
+        with path.open("rb") as handle:
+            while pending:
+                chunk = handle.read(_SCAN_CHUNK)
+                if not chunk:
+                    return False
+                window = tail + chunk
+                haystack = window.lower() if lowered_index else b""
+                for index in list(pending):
+                    if index in lowered_index:
+                        found = lowered_index[index] in haystack
+                    else:
+                        found = literal_index[index] in window
+                    if found:
+                        pending.discard(index)
+                tail = window[-overlap:] if overlap > 0 else b""
+    except OSError:
+        return True
+    return True
+
+
+def _matching_events(path: Path, terms: list[str]) -> Iterable[tuple[int, Optional[int], str]]:
+    """Scan raw events, expanding compacted snapshots into their retained rows.
+
+    A ``runtime_snapshot_compacted`` payload holds the only copy of a compacted
+    session's dialogue, so a raw-line filter alone hides every message in it.
+    """
+    # Prefilter on bytes before decoding: casefold() blocks on the GIL for the
+    # whole line, while bytes.lower() stays in C and skips most lines outright.
+    lowered_terms = [term.lower().encode("ascii") for term in terms if term.isascii()]
+    literal_terms = [term.encode("utf-8") for term in terms if not term.isascii() and term == term.casefold()]
+    folded_terms = [term for term in terms if not term.isascii() and term != term.casefold()]
+    try:
+        if path.stat().st_size > _SCAN_CHUNK and not _file_may_contain(path, terms):
+            return
+    except OSError:
         return
     try:
-        for row, _raw in _matching_jsonl(path, terms):
-            yield render(row)
-    finally:
-        # Defer all precomputation until the complete foreground query is done,
-        # including global queries that continue scanning other source files.
-        if precompute is not None and len(precompute) < 8:
-            precompute.append((path, render))
+        with path.open("rb") as handle:
+            for raw in handle:
+                lowered = raw.lower() if lowered_terms else b""
+                if not all(term in lowered for term in lowered_terms):
+                    continue
+                if not all(term in raw for term in literal_terms):
+                    continue
+                line = raw.decode("utf-8", errors="replace")
+                if folded_terms and not all(term in line.casefold() for term in folded_terms):
+                    continue
+                try:
+                    event = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                seq = int(event.get("seq") or 0)
+                rows = _snapshot_ui_rows(event)
+                if rows:
+                    for index, row in enumerate(rows):
+                        text = _ui_row_text(row)
+                        if text and all(term in text.casefold() for term in terms):
+                            yield seq, index, text
+                    continue
+                text = _clean_event_text(event)
+                if text and all(term in text.casefold() for term in terms):
+                    yield seq, None, text
+    except OSError:
+        return
+
+
+def _render_event_row(event: Mapping[str, Any]) -> tuple[str, str]:
+    return str(int(event.get("seq") or 0)), _clean_event_text(event)
+
+
+_MAINTENANCE_LOCK = threading.Lock()
+_maintenance_done = False
+
+
+def _maintenance_once(root: Path) -> None:
+    """Remove the retired per-file caches, once per process."""
+    global _maintenance_done
+    with _MAINTENANCE_LOCK:
+        if _maintenance_done:
+            return
+        _maintenance_done = True
+    # Targeted patterns only: a recursive rglob over the subagent tree costs
+    # seconds on a large library, and these are the only places caches lived.
+    for pattern in (
+        "*/.history-search/*.sqlite3*",
+        "*/history_context_archives/.history-search/*.sqlite3*",
+        "*/subagents/*/.history-search/*.sqlite3*",
+        "*/subagents/*/history_context_archives/.history-search/*.sqlite3*",
+    ):
+        for db in Path(root).glob(pattern):
+            try:
+                db.unlink()
+            except OSError:
+                pass
+
+
+def _archive_renderer(path: Path):
+    archive_id = path.stem
+
+    def render(row):
+        if str(row.get("kind") or "") != "message":
+            return "", ""
+        return f"archive:{archive_id}:item:{row.get('item_id') or ''}", _clean_message_text(row)
+
+    return render
+
+
+def _indexed_file(
+    session_dir: Path,
+    path: Path,
+    terms: list[str],
+    limit: int,
+    *,
+    kind: str = "events",
+) -> Optional[list[tuple[str, str]]]:
+    """Per-file hits from the single global index, or None when unavailable."""
+    from history_global_index import path_is_indexed, search as index_search, warm
+
+    root = session_dir.parent
+    render = _archive_renderer(path) if kind == "archive" else _render_event_row
+    if not path_is_indexed(root, path):
+        try:
+            warm(
+                root,
+                [(path, render, _ui_row_text if kind == "events" else None)],
+                budget_bytes=16 * 1024 * 1024,
+            )
+        except Exception:
+            pass
+        return None
+    rows = index_search(root, terms, limit=max(1, limit), path=str(path))
+    if rows is None:
+        return None
+    return _verify_spans(
+        str(path),
+        [(start, end, ref, stored) for _path, start, end, ref, _folded, stored in rows],
+        terms,
+        kind=kind,
+    )
 
 
 def _search_session(
@@ -424,10 +605,30 @@ def _search_session(
     *,
     global_scope: bool,
     include_source: bool,
-    precompute: Optional[list] = None,
+    prefetched: Optional[list[tuple[str, str]]] = None,
+    skip_events: bool = False,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     seen_content: set[str] = set()
+
+    def add_hit(ref: str, clean_text: str, source_path: Path) -> bool:
+        if not clean_text or not all(term in clean_text.casefold() for term in terms):
+            return False
+        content_key = " ".join(clean_text.split()).casefold()
+        if content_key in seen_content:
+            return False
+        seen_content.add(content_key)
+        result: dict[str, Any] = {
+            "ref": ref,
+            "content": _search_snippet(clean_text, terms),
+        }
+        if global_scope:
+            result["session_id"] = session_id
+        if include_source:
+            result["source_file"] = str(source_path)
+        results.append(result)
+        return len(results) >= remaining
+
     for path in _iter_archive_paths(session_dir):
         archive_id = path.stem
 
@@ -435,50 +636,45 @@ def _search_session(
             text = _clean_message_text(row) if row.get("kind") == "message" else ""
             return str(row.get("item_id") or ""), text
 
-        candidates = _search_candidates(path, terms, render_archive, remaining - len(results), seen_content, precompute)
-        for item_id, clean_text in candidates:
-            if not clean_text or not all(term in clean_text.casefold() for term in terms):
-                continue
-            content_key = " ".join(clean_text.split()).casefold()
-            if content_key in seen_content:
-                continue
-            seen_content.add(content_key)
-            result = {
-                "ref": archive_item_ref(session_id, archive_id, item_id),
-                "content": _search_snippet(clean_text, terms),
-            }
-            if global_scope:
-                result["session_id"] = session_id
-            if include_source:
-                result["source_file"] = str(path)
-            results.append(result)
-            if len(results) >= remaining:
-                candidates.close()
+        indexed = _indexed_file(session_dir, path, terms, remaining - len(results), kind="archive")
+        if indexed is not None:
+            for ref, clean_text in indexed:
+                if add_hit(ref, clean_text, path):
+                    return results
+            continue
+        for row, _raw in _matching_jsonl(path, terms):
+            item_id, clean_text = render_archive(row)
+            if add_hit(archive_item_ref(session_id, archive_id, item_id), clean_text, path):
                 return results
     event_path = session_dir / "events.jsonl"
 
-    def render_event(event):
-        return str(int(event.get("seq") or 0)), _clean_event_text(event)
+    def add_event(ref: str, clean_text: str) -> bool:
+        return add_hit(ref, clean_text, event_path)
 
-    candidates = _search_candidates(event_path, terms, render_event, remaining - len(results), seen_content, precompute)
-    for seq, clean_text in candidates:
-        if not clean_text or not all(term in clean_text.casefold() for term in terms):
-            continue
-        content_key = " ".join(clean_text.split()).casefold()
-        if content_key in seen_content:
-            continue
-        seen_content.add(content_key)
-        result = {
-            "ref": event_ref(session_id, int(seq)),
-            "content": _search_snippet(clean_text, terms),
-        }
-        if global_scope:
-            result["session_id"] = session_id
-        if include_source:
-            result["source_file"] = str(event_path)
-        results.append(result)
-        if len(results) >= remaining:
-            candidates.close()
+    if prefetched is not None:
+        for ref, clean_text in prefetched:
+            if add_event(ref, clean_text):
+                return results
+        return results
+    if skip_events:
+        return results
+
+    candidates: Optional[Iterable] = None
+    if remaining - len(results) > 0:
+        # One index answers both scopes; the raw scan remains the authority
+        # whenever a file is not covered yet.
+        indexed = _indexed_file(session_dir, event_path, terms, remaining - len(results))
+        if indexed is not None:
+            for ref, text in indexed:
+                if add_event(ref, text):
+                    return results
+            return results
+        candidates = _matching_events(event_path, terms)
+    for seq, ui_index, clean_text in candidates or ():
+        ref = event_ref(session_id, int(seq))
+        if ui_index is not None:
+            ref = f"{ref}:ui:{int(ui_index)}"
+        if add_event(ref, clean_text):
             return results
     return results
 
@@ -520,7 +716,15 @@ def _read_ref(
         if value is None:
             value = next((row for row in _read_jsonl(path) if int(row.get("seq") or 0) == wanted), None)
         if value is not None:
-            rendered = _clean_event_text(value)
+            if match.group("ui") is not None:
+                index = int(match.group("ui"))
+                payload = value.get("payload")
+                rows = payload.get("ui_events") if isinstance(payload, Mapping) else None
+                row = rows[index] if isinstance(rows, list) and 0 <= index < len(rows) else None
+                if isinstance(row, Mapping):
+                    rendered = _ui_row_text(row)
+            if not rendered:
+                rendered = _clean_event_text(value)
     else:
         archive_id = str(match.group("archive") or "")
         item_id = str(match.group("item") or "")
@@ -551,6 +755,127 @@ def _read_ref(
     if include_source:
         result["source_file"] = source_file
     return result
+
+
+def _verify_spans(
+    path: str, items, terms: list[str], *, kind: str = "events"
+) -> list[tuple[str, str]]:
+    """Re-read each candidate line and re-render it before trusting a hit."""
+    found: list[tuple[str, str]] = []
+    parent = Path(path).parent
+    session_id = parent.parent.name if kind == "archive" else parent.name
+    cache: dict[tuple[int, int], Any] = {}
+    try:
+        with open(path, "rb") as handle:
+            for start, end, ref, stored in items:
+                key = (start, end)
+                if stored is not None:
+                    # Snapshot rows keep their rendered text: re-deriving it
+                    # would mean re-parsing a line that can be hundreds of MB.
+                    if all(term in stored.casefold() for term in terms):
+                        if ":" in ref:
+                            seq_text, ui_text = ref.split(":", 1)
+                            full_ref = f"{event_ref(session_id, int(seq_text))}:ui:{int(ui_text)}"
+                        else:
+                            full_ref = event_ref(session_id, int(ref))
+                        found.append((full_ref, stored))
+                    continue
+                if key not in cache:
+                    handle.seek(start)
+                    raw = handle.read(end - start)
+                    try:
+                        cache[key] = json.loads(raw.decode("utf-8", errors="replace"))
+                    except (TypeError, ValueError):
+                        cache[key] = None
+                    if len(cache) > 2:
+                        cache.pop(next(iter(cache)))
+                event = cache[key]
+                if not isinstance(event, dict):
+                    continue
+                if kind == "archive":
+                    text = _clean_message_text(event) if event.get("kind") == "message" else ""
+                    if text and all(term in text.casefold() for term in terms):
+                        found.append((f"history:{session_id}:{ref}", text))
+                    continue
+                if ":" in ref:
+                    seq_text, ui_text = ref.split(":", 1)
+                    index = int(ui_text)
+                    payload = event.get("payload")
+                    rows = payload.get("ui_events") if isinstance(payload, Mapping) else None
+                    row = rows[index] if isinstance(rows, list) and 0 <= index < len(rows) else None
+                    text = _ui_row_text(row) if isinstance(row, Mapping) else ""
+                    full_ref = f"{event_ref(session_id, int(seq_text))}:ui:{index}"
+                else:
+                    text = _clean_event_text(event)
+                    full_ref = event_ref(session_id, int(ref))
+                if text and all(term in text.casefold() for term in terms):
+                    found.append((full_ref, text))
+    except OSError:
+        return []
+    return found
+
+
+def _global_prefetch(
+    root: Path,
+    session_dirs: list[tuple[str, Path]],
+    terms: list[str],
+    limit: int,
+) -> tuple[Optional[dict[str, list[tuple[str, str]]]], set[str]]:
+    """Index-backed candidates per source file, plus files fully covered by it."""
+    from history_global_index import indexed_paths, search as index_search
+
+    try:
+        rows = index_search(root, terms, limit=limit)
+    except Exception:
+        return None, set()
+    if rows is None:
+        return None, set()
+    indexed = indexed_paths(root)
+    grouped: dict[str, list] = {}
+    for path, start, end, ref, _folded, stored in rows:
+        grouped.setdefault(path, []).append((start, end, ref, stored))
+    hits: dict[str, list[tuple[str, str]]] = {}
+    for path, items in grouped.items():
+        if path not in indexed:
+            continue  # Changed since projection; the scan owns it.
+        verified = _verify_spans(path, items, terms)
+        if verified:
+            hits[path] = verified
+    return hits, indexed
+
+
+def _search_sessions_parallel(
+    session_dirs: list[tuple[str, Path]],
+    terms: list[str],
+    result_limit: int,
+    *,
+    include_source: bool,
+) -> list[dict[str, Any]]:
+    """Global scan over independent files; ordered batches keep newest-first order."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    results: list[dict[str, Any]] = []
+    batch = 8
+    with ThreadPoolExecutor(max_workers=batch, thread_name_prefix="history-search") as pool:
+        for start in range(0, len(session_dirs), batch):
+            chunk = session_dirs[start:start + batch]
+            futures = [
+                pool.submit(
+                    _search_session,
+                    session_id,
+                    session_dir,
+                    terms,
+                    max(1, result_limit - len(results)),
+                    global_scope=True,
+                    include_source=include_source,
+                )
+                for session_id, session_dir in chunk
+            ]
+            for future in futures:
+                results.extend(future.result())
+                if len(results) >= result_limit:
+                    return results[:result_limit]
+    return results[:result_limit]
 
 
 def history_context(
@@ -588,22 +913,51 @@ def history_context(
     terms = [term.casefold() for term in normalized_query.split() if term]
     result_limit = min(50, max(1, int(limit or 10)))
     results: list[dict[str, Any]] = []
-    precompute: list = []
     session_dirs = _session_dirs(session_manager, current_session_id, scope_name)
-    for session_id, session_dir in session_dirs:
-        results.extend(
-            _search_session(
-                session_id,
-                session_dir,
+    if scope_name == "global":
+        root = Path(session_manager.sessions_dir)
+        _maintenance_once(root)
+    if scope_name == "global" and len(session_dirs) > 8:
+        prefetched, indexed = _global_prefetch(root, session_dirs, terms, result_limit * 4)
+        if prefetched is None:
+            results = _search_sessions_parallel(
+                session_dirs,
                 terms,
-                result_limit - len(results),
-                global_scope=scope_name == "global",
+                result_limit,
                 include_source=bool(include_source),
-                precompute=precompute,
             )
-        )
-        if len(results) >= result_limit:
-            break
+        else:
+            for session_id, session_dir in session_dirs:
+                path = str(session_dir / "events.jsonl")
+                results.extend(
+                    _search_session(
+                        session_id,
+                        session_dir,
+                        terms,
+                        result_limit - len(results),
+                        global_scope=True,
+                        include_source=bool(include_source),
+                        prefetched=prefetched.get(path),
+                        skip_events=path in indexed,
+                    )
+                )
+                if len(results) >= result_limit:
+                    break
+    else:
+        for session_id, session_dir in session_dirs:
+            results.extend(
+                _search_session(
+                    session_id,
+                    session_dir,
+                    terms,
+                    result_limit - len(results),
+                    global_scope=scope_name == "global",
+                    include_source=bool(include_source),
+                )
+            )
+            if len(results) >= result_limit:
+                break
+    results = results[:result_limit]
     response: dict[str, Any] = {"results": results}
     if not results:
         response["message"] = "未找到匹配的会话内容"
@@ -617,10 +971,6 @@ def history_context(
             if len(source_files) >= 20:
                 break
         response["source_files"] = source_files[:20]
-    from history_search_index import schedule
-
-    for path, render in precompute:
-        schedule(path, render)
     return response
 
 
