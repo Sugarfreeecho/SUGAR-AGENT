@@ -193,9 +193,11 @@
 | 删除限本人（非机主删他人会话 403） | `service._mutate` 的 `session.delete` 分支 |
 | 目录档 1/2（档 2 拒区外写/删，档 1 拒一切写与进程） | `security/runtime.py::_directory_denial` |
 | 飞书入站档位：允许名单 → 白名单，私聊 → private，群 → group（`FEISHU_INBOUND_LEVEL`） | `plugins/feishu-transport/feishu_transport/{config,adapter}.py` |
+| 本机访问令牌：`/sessions*` 写操作拦跨站；`MYAGENT_LOCAL_TOKEN_STRICT=1` 时要求 `X-MyAgent-Local-Token` 或 cookie | `app/local_access.py`、`webui.py` 中间件 |
+| 审批卡片带 `turn_actor`（等级/主体/渠道） | `app/tool_approval_gate.py::approval_turn_actor` |
 
 待落地：
 
-- 本机令牌与审批卡片 `turn_actor`。
+- 前端在严格模式下自动携带令牌（现在浏览器同源请求默认放行）。
 - 微信 / QQ 渠道：仓库内暂无对应插件，接入时套用飞书的 `level_for` + `_subject` 模式即可。
 - B站/飞书之外的插件（acp-agents、agent-goal）尚未声明档位，保持旧行为。

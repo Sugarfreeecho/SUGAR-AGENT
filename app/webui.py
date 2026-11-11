@@ -10833,6 +10833,15 @@ from fastapi.responses import RedirectResponse as _RedirectResponse
 @fastapi_app.middleware("http")
 async def _config_check(req: _Request, call_next):
     p = req.url.path
+    from local_access import check_request as _check_local_access
+
+    denial = _check_local_access(req.method, p, req.headers, getattr(req, "cookies", None))
+    if denial:
+        return JSONResponse(
+            {"ok": False, "error": denial,
+             "message": "本机写操作需要 UI 令牌；脚本请带 X-MyAgent-Local-Token 头。"},
+            status_code=403,
+        )
     if p.startswith("/api/lifecycle/") or p == "/api/ready":
         return await call_next(req)
     from runtime_lifecycle import is_draining

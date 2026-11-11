@@ -53,6 +53,18 @@ def new_approval_id() -> str:
     return uuid.uuid4().hex
 
 
+def approval_turn_actor(session_id: str) -> Dict[str, Any]:
+    """卡片上"谁在操作"：来自当轮身份登记，取不到就留空。"""
+    try:
+        from session_permissions import get_turn_actor
+
+        actor = get_turn_actor(session_id)
+        return {"level": actor.get("level", ""), "subject": actor.get("subject", ""),
+                "channel": actor.get("channel", "")}
+    except Exception:
+        return {}
+
+
 def has_live_approval_waiter(session_id: str, approval_id: str) -> bool:
     key = (str(session_id or "").strip(), str(approval_id or "").strip())
     with _PENDING_LOCK:
@@ -259,7 +271,8 @@ async def wait_tool_ui_approval_after_emit(
         return False
     with _PENDING_LOCK:
         _PENDING[key] = fut
-        _PENDING_META[key] = {"created_at": time.time(), **dict(metadata or {})}
+        _PENDING_META[key] = {"created_at": time.time(), **dict(metadata or {}),
+                              "turn_actor": approval_turn_actor(key[0])}
         _PENDING_REVIEW_CONTEXT.pop(key, None)
         _PENDING_RESOLUTION.pop(key, None)
         if isinstance(review_context, dict):
@@ -272,6 +285,7 @@ async def wait_tool_ui_approval_after_emit(
 
             durable_service = get_human_interaction_service()
             durable_meta = {k: v for k, v in dict(metadata or {}).items() if not str(k).startswith("_")}
+            durable_meta.setdefault("turn_actor", approval_turn_actor(key[0]))
             durable_service.create_approval(
                 key[0],
                 approval_id=key[1],
