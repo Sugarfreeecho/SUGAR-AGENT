@@ -1,6 +1,7 @@
 # SugarAgent 浏览器侧栏插件 · 设计文档（定稿）
 
-- 版本：**v2.1 定稿**（2026-09）｜v2 → v2.1：并入 D20（交付形态：独立扩展，不纳入插件体系）｜最早稿：`browser_extension_sidebar_design.md`（v0.9 草案，仅存档）
+- 版本：**v2.1（已归档）**｜⚠️ 本文写于"仓库尚无扩展"的假设之上，协议与形态已被现实推翻；**现状依据请看 [browser_extension_sidebar_design_v3.md](browser_extension_sidebar_design_v3.md)**
+- 历史：v2 → v2.1 并入 D20（交付形态：独立扩展，不纳入插件体系）｜最早稿：`browser_extension_sidebar_design.md`（v0.9 草案，仅存档）
 - 关系：上游分析见 [browser_extension_sidebar_plan.md](browser_extension_sidebar_plan.md)（代码现状 + 三条路线对比）
 - 本文档中所有决策均由用户逐条确认（见 §0 决策台账）；未经确认的内容一律集中在 §18「默认假设与遗留项」，不散落在正文。
 
