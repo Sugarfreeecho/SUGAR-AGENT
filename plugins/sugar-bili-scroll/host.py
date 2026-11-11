@@ -1213,7 +1213,8 @@ def _bind_session(sid, *, key, name, prompt, profile=""):
 
 def _run_round_blocking(prompt: str, session_id: str, run_id: str, budget: float = 0.0,
                         allow: Optional[list[str]] = None, deny: Optional[list[str]] = None,
-                        policy: Optional[dict] = None, on_event=None) -> dict:
+                        policy: Optional[dict] = None, on_event=None,
+                        level: str = "") -> dict:
     from session_control.public import host_client, stable_key
     client = host_client(PLUGIN_ID, session_ids=[session_id],
                          capabilities=["session.send", "operation.cancel"])
@@ -1225,6 +1226,7 @@ def _run_round_blocking(prompt: str, session_id: str, run_id: str, budget: float
             allow=[mcp_function_name(name) for name in allow] if allow is not None else None,
             deny=[mcp_function_name(name) for name in deny] if deny else None,
             context=dict(policy or {}), on_event=on_event,
+            level=level,
             should_stop=lambda: bool(_runtime.get("stopping", False)))
         content = receipt.get("content")
         return {"ok": receipt["status"] == "succeeded",

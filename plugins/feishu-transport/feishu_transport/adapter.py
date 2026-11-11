@@ -238,6 +238,19 @@ class FeishuTransportAdapter:
             credential_kind="feishu",
         )
 
+    def _inbound_level(self, message: FeishuInboundMessage) -> str:
+        return self.config.level_for(
+            is_group=bool(message.is_group),
+            sender_open_id=message.sender_open_id,
+            sender_union_id=message.sender_union_id,
+            chat_id=message.chat_id,
+        )
+
+    @staticmethod
+    def _chat_subject(message: FeishuInboundMessage) -> str:
+        """群/会话维度的归属主体：同群成员共享同一 created_by。"""
+        return "feishu-chat:" + str(message.chat_id or "")
+
     def _admission_error(self, message: FeishuInboundMessage) -> str:
         if not message.message_id or not message.chat_id or not message.sender_open_id:
             return "invalid_event"
@@ -289,7 +302,7 @@ class FeishuTransportAdapter:
         result, _ = await self.service.execute(
             principal,
             "session.create",
-            {"name": f"飞书会话 {message.chat_id[-8:]}"},
+            {"name": f"飞书会话 {message.chat_id[-8:]}", "_subject": self._chat_subject(message)},
             idempotency_key=(
                 f"feishu-rebind:{key}:{stale_sid}"
                 if stale_sid
@@ -312,7 +325,7 @@ class FeishuTransportAdapter:
         result, _ = await self.service.execute(
             principal,
             "session.create",
-            {"name": name or f"飞书会话 {message.chat_id[-8:]}"},
+            {"name": name or f"飞书会话 {message.chat_id[-8:]}", "_subject": self._chat_subject(message)},
             idempotency_key=f"{message.message_id}:new",
         )
         sid = str(result.get("session_id") or "")
@@ -493,6 +506,7 @@ class FeishuTransportAdapter:
         sid = await self._current_session(message, principal, create=True)
         if getattr(self.service, "durable_operations", False):
             row = {"session_id": sid, "text": text, "operation_id": "", "cursor": 0,
+                "level": self._inbound_level(message), "subject": self._chat_subject(message),
                 "principal": {"device_id": principal.device_id, "name": principal.name,
                     "scopes": list(principal.scopes), "credential_kind": principal.credential_kind}}
             await asyncio.to_thread(self.state_store.track_delivery, message.message_id, row)
@@ -511,7 +525,8 @@ class FeishuTransportAdapter:
                 result, _ = await self.service.execute(
                     principal,
                     "session.send",
-                    {"session_id": sid, "message": text, "ui_message": text},
+                    {"session_id": sid, "message": text, "ui_message": text,
+                     "_level": self._inbound_level(message), "_subject": self._chat_subject(message)},
                     idempotency_key=message.message_id,
                 )
             except RemoteControlError as exc:
@@ -526,6 +541,8 @@ class FeishuTransportAdapter:
                         "ui_message": text,
                         "mode": "append",
                         "client_id": message.message_id,
+                        "_level": self._inbound_level(message),
+                        "_subject": self._chat_subject(message),
                     },
                     idempotency_key=f"{message.message_id}:steer",
                 )
@@ -561,7 +578,9 @@ class FeishuTransportAdapter:
                 try:
                     if not row["operation_id"]:
                         receipt, _ = await self.service.execute(principal, "session.send", {
-                            "session_id": row["session_id"], "message": row["text"], "mode": "queue"}, idempotency_key=mid)
+                            "session_id": row["session_id"], "message": row["text"], "mode": "queue",
+                            "_level": row.get("level") or "group",
+                            **({"_subject": row["subject"]} if row.get("subject") else {})}, idempotency_key=mid)
                         row["operation_id"] = receipt["operation_id"]
                         await asyncio.to_thread(self.state_store.save_delivery, mid, row)
                     if not row.get("acknowledged"):

@@ -92,6 +92,7 @@ class SessionControlService:
             if not isinstance(sid, str) or not self._session_summary(sid):
                 raise ControlError("session_not_found", "Session not found", status=404)
             check_session(principal, sid, self.manager)
+            self._enforce_actor_scope(principal, params, sid)
         sources = [*principal.source_ancestors, *([params["_source"]] if params.get("_source") else [])]
         seen_sources = set()
         for source in sources:
@@ -194,6 +195,10 @@ class SessionControlService:
                 params = await asyncio.to_thread(prepare_message_attachments, principal, params, self.store)
             if params.get("mode", "queue") not in {"queue", "append", "interrupt"}:
                 raise ControlError("invalid_params", "Invalid message mode")
+            # 同一身份在同一轮内继续发言：合并进当前轮，不另起一轮。
+            if params.get("mode", "queue") == "queue" and self._same_turn_actor(principal, params):
+                self.authorize(principal, "session.steer", params)
+                method = "session.steer"
             if params.get("mode", "queue") != "queue":
                 self.authorize(principal, "session.steer", params)
                 if params.get("mode") == "interrupt":
@@ -239,6 +244,54 @@ class SessionControlService:
                 "created_at": operation["created"], "updated_at": operation["updated"],
                 "session_id": operation["session_id"] or (operation.get("result") or {}).get("session_id", ""), "run_id": (operation.get("result") or {}).get("run_id", operation["run_id"]),
                 "error": operation.get("error")}
+
+    def _actor_fields(self, principal, params):
+        """当轮身份。只有显式声明 `_level` 的来源才建身份，缺省保持既有本机行为。"""
+        from session_permissions import normalize_level
+
+        raw = str((params or {}).get("_level") or "").strip()
+        if not raw:
+            return None
+        level = normalize_level(raw, default="stranger")
+        # 插件与自动化不能自称机主：只有管理员身份能拿到 owner。
+        if level == "owner" and not principal.admin:
+            level = "stranger"
+        source = (params or {}).get("_source") or {}
+        subject = str((params or {}).get("_subject") or principal.id or "")
+        return {"level": level, "subject": subject,
+                "channel": str(source.get("id") or ""), "label": str(principal.name or "")}
+
+    def _enforce_actor_scope(self, principal, params, sid):
+        """作用域 1/2：只能碰自己或自己创建的会话。未声明身份的调用保持旧行为。"""
+        fields = self._actor_fields(principal, params)
+        if not fields or principal.admin:
+            return
+        from session_permissions import axes_for
+
+        axis = axes_for(fields["level"]).scope
+        if axis >= 3:
+            return
+        meta = self.manager._load_metadata(sid) or {}
+        owner = str(meta.get("created_by") or "")
+        subject = fields["subject"]
+        allowed = owner == subject
+        if axis <= 1:
+            current = str(principal.policy.get("current_session") or "")
+            allowed = allowed or (bool(current) and current == sid)
+        if not allowed:
+            raise ControlError("scope_denied", "Session belongs to another identity", status=403)
+
+    def _same_turn_actor(self, principal, params):
+        fields = self._actor_fields(principal, params)
+        if not fields or not params.get("session_id"):
+            return False
+        if not self.deps.is_stream_active(params["session_id"]):
+            return False
+        from session_permissions import actor_key, get_turn_actor
+
+        current = get_turn_actor(params["session_id"], default="")
+        key = actor_key(level=fields["level"], subject=fields["subject"], channel=fields["channel"])
+        return bool(current.get("key")) and current["key"] == key
 
     async def _read(self, principal, method, p):
         sid = p.get("session_id", "")
@@ -518,8 +571,10 @@ class SessionControlService:
             target = str(uuid.uuid5(uuid.UUID(operation["id"]), "session"))
             if not self.manager.get_session_summary(target):
                 if hasattr(self.manager, "create_session_with_id"):
+                    origin = str((p.get("_source") or {}).get("id") or "control")
                     await asyncio.to_thread(self.manager.create_session_with_id, target, work_dir=workspace,
-                                            model_profile_id=p.get("model_profile_id", ""))
+                                            model_profile_id=p.get("model_profile_id", ""),
+                                            created_by=str(p.get("_subject") or principal.id or ""), origin=origin)
                 else:
                     raise ControlError("unsupported_backend", "Backend lacks deterministic session creation", status=409)
             if p.get("name"):
@@ -569,6 +624,13 @@ class SessionControlService:
                     await callback(sid, p[key])
             return {"session_id": sid, "session": self.manager.get_session_summary(sid)}
         if method in {"session.archive", "session.delete"}:
+            if method == "session.delete" and not principal.admin:
+                fields = self._actor_fields(principal, p)
+                if fields:
+                    meta = self.manager._load_metadata(sid) or {}
+                    owner = str(meta.get("created_by") or "")
+                    if owner and owner != fields["subject"]:
+                        raise ControlError("scope_denied", "Deleting another identity's session requires the owner", status=403)
             if method == "session.delete" or p.get("archived", True):
                 await self.stop_session(sid)
             if method.endswith("archive"):
@@ -846,6 +908,11 @@ class SessionControlService:
             principal = Principal(**p["_principal"])
             with local_step('authorize'):
                 self.authorize(principal, op["method"], p)
+            # 当轮身份：只影响本轮的工具与目录判定，不写入会话权限配置。
+            actor = self._actor_fields(principal, p)
+            if actor:
+                from session_permissions import set_turn_actor
+                set_turn_actor(sid, **actor)
             if p.get("_source_lifecycle") and p.get("_source", {}).get("id") not in self.callbacks.get("source_before_run", {}):
                 return  # Restored domain inputs wait for their lifecycle adapter.
             with local_step('load_metadata'):

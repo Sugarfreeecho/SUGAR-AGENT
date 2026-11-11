@@ -43,6 +43,22 @@ class FeishuConfig:
     session_scope: str = "chat"
     response_timeout_seconds: int = 7200
     max_reply_chars: int = 3500
+    inbound_level: str = "group"
+
+    def level_for(self, *, is_group: bool, sender_open_id: str, sender_union_id: str = "",
+                  chat_id: str = "") -> str:
+        """飞书入站身份档：命中允许名单即白名单，私聊落 private，群聊落 group。
+
+        群成员数不可知，按规范视为 ≥5，因此不做小群降级。
+        """
+        people = {str(sender_open_id or "").strip(), str(sender_union_id or "").strip()} - {""}
+        if people & set(self.allowed_open_ids):
+            return "whitelist"
+        if str(chat_id or "").strip() and str(chat_id).strip() in self.allowed_chat_ids:
+            return "whitelist"
+        if not is_group:
+            return "private"
+        return self.inbound_level or "group"
 
     @classmethod
     def from_env(cls, project_root: Path) -> "FeishuConfig":
@@ -58,6 +74,9 @@ class FeishuConfig:
         scope = os.getenv("FEISHU_SESSION_SCOPE", "chat").strip().lower()
         if scope not in {"chat", "thread"}:
             scope = "chat"
+        level = os.getenv("FEISHU_INBOUND_LEVEL", "group").strip().lower()
+        if level not in {"whitelist", "private", "group", "stranger"}:
+            level = "group"
         return cls(
             enabled=_bool_env("FEISHU_ENABLED", False),
             app_id=os.getenv("FEISHU_APP_ID", "").strip(),
@@ -71,6 +90,7 @@ class FeishuConfig:
                 "FEISHU_RESPONSE_TIMEOUT_SEC", 7200, 60, 86400
             ),
             max_reply_chars=_int_env("FEISHU_MAX_REPLY_CHARS", 3500, 500, 8000),
+            inbound_level=level,
         )
 
     def validate(self) -> None:

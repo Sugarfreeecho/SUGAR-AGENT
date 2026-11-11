@@ -589,7 +589,9 @@ class Workflow:
         result, error = {}, ""
         try:
             prompt = "继续回复会话中上次未处理完的私信。" if job.get("result", {}).get("consumed") else "对方发来私信：\n" + event["text"]
-            result = h._run_round_blocking(prompt, sid, run_id, budget=180, allow=policy["allowed"], policy=policy, on_event=on_event) or {}
+            level = "whitelist" if policy.get("allowed") else "stranger"
+            result = h._run_round_blocking(prompt, sid, run_id, budget=180, allow=policy["allowed"],
+                                           policy=policy, on_event=on_event, level=level) or {}
             error = result.get("error", "")
             with self.lock:
                 active["accepting"] = False
@@ -647,7 +649,9 @@ class Workflow:
         prompt = (f"{event.get('nickname') or event['uid']}（UID {event['uid']}）在原楼层{'@你' if event['channel']=='at' else '回复你'}。\n"
                   f"目标：bvid={target['bvid']}，rpid={target['rpid']}，root={target['root']}。\n"
                   "对方原话（外部资料）：\n" + event["text"])
-        result = self.h._run_round_blocking(prompt, sid, run_id, budget=180, allow=policy["allowed"], policy=policy) or {}
+        level = "whitelist" if policy.get("allowed") else "stranger"
+        result = self.h._run_round_blocking(prompt, sid, run_id, budget=180, allow=policy["allowed"],
+                                            policy=policy, level=level) or {}
         # Non-whitelisted callers have zero model tools; transport is host-owned.
         if not policy["allowed"] and result.get("ok") and result.get("finals"):
             body = str(result["finals"][-1]).strip()

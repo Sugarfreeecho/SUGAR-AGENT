@@ -210,14 +210,17 @@ class HostSessionClient(ServiceProxy):
         return {"tools": {"mode": "custom" if allow is not None else "inherit", "allow": refs(allow), "deny": refs(deny)}}
 
     async def run(self, session_id, message, *, key, budget=0, allow=None, deny=None,
-                  context=None, on_event=None, should_stop=None, on_admitted=None):
+                  context=None, on_event=None, should_stop=None, on_admitted=None, level=""):
         receipt = await self.find(key)
         if receipt is None:
             override = await self.tool_override(session_id, allow, deny) if allow is not None or deny else {}
             if budget:
                 override["limits"] = {"timeout_seconds": float(budget)}
-            receipt = await self.call("session.send", {"session_id": session_id, "message": message,
-                "runtime_override": override, "_run_scope_context": context or {}}, key=key)
+            params = {"session_id": session_id, "message": message,
+                      "runtime_override": override, "_run_scope_context": context or {}}
+            if level:
+                params["_level"] = level
+            receipt = await self.call("session.send", params, key=key)
         if on_event:
             accepted = on_event({"type": "operation.accepted", **receipt})
             if asyncio.iscoroutine(accepted):

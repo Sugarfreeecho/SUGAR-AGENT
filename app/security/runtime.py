@@ -1092,7 +1092,71 @@ def authorize_tool(
     decision, context = authorize_request(
         session_id=session_id, request=request, workspace=workspace
     )
+    # 身份档位只做"降级"：正常策略已经拒绝的保持原判，避免掩盖真实原因。
+    if decision.outcome is not DecisionOutcome.DENY:
+        decision = _identity_tool_decision(session_id, tool_name, decision, request)
     return request, decision, context
+
+
+def _identity_tool_decision(
+    session_id: str,
+    tool_name: str,
+    decision: SecurityDecision,
+    request: CapabilityRequest | None = None,
+) -> SecurityDecision:
+    """按当轮身份的工具档与目录档拦截；工具清单本身不随身份变化。"""
+    if decision.outcome is DecisionOutcome.DENY:
+        return decision  # 已有策略拒绝优先，保留原始原因与规则。
+    try:
+        from session_permissions import axes_for, denial_payload, tool_decision, turn_level
+
+        level = turn_level(session_id)
+        blocked = _directory_denial(axes_for(level).directory, decision, request)
+        if blocked:
+            from .models import SecurityDecision as _Decision
+            return _Decision(
+                DecisionOutcome.DENY,
+                blocked,
+                "identity.directory_denied",
+                decision.request_digest,
+                {"directory_axis": axes_for(level).directory, "turn_actor": level},
+            )
+        allowed, rule, available = tool_decision(tool_name, level)
+        if allowed:
+            return decision
+        payload = denial_payload(tool_name, level, rule)
+    except Exception:
+        # 权限模块异常不能把普通工具调用变成放行，也不能误伤本机使用。
+        return decision
+    listed = "、".join(available) if available else "（无）"
+    return SecurityDecision(
+        DecisionOutcome.DENY,
+        f"工具 {tool_name} 超出当前身份（{payload['denied_by']}）的可用范围；可用工具：{listed}",
+        rule,
+        decision.request_digest,
+        {"identity_denial": payload},
+    )
+
+
+def _directory_denial(axis: int, decision: SecurityDecision, request: CapabilityRequest | None) -> str:
+    """目录档 1/2 的补充判定。
+
+    档 3 及以上沿用 app_restricted（区外写需审批）；档 2 把区外写/删直接拒绝；
+    档 1 连区内写与进程执行也拒绝，只保留读取。
+    """
+    if axis >= 3:
+        return ""
+    action = str(getattr(request, "action", "") or "")
+    rule = str(decision.rule_id or "")
+    if axis <= 1:
+        if action in {"fs.write", "fs.delete", "process.exec"}:
+            return "当前身份目录档为 1（会话目录只读），不允许写入、删除或执行进程。"
+        return ""
+    if action == "fs.write" and rule not in {"app_restricted.write"}:
+        return "当前身份目录档为 2（仅会话目录可写），工作区外的写入需升级到目录档 3。"
+    if action == "fs.delete" and rule not in {"app_restricted.delete"}:
+        return "当前身份目录档为 2（仅会话目录可写），工作区外的删除需升级到目录档 3。"
+    return ""
 
 
 def add_permission_rule(

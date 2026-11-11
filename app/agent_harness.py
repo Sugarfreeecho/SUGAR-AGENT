@@ -7597,6 +7597,7 @@ class SessionManager:
         work_dir: str = "", system_context: str = "", standby: bool = False,
         system_context_mode: str = "append",
         control_session_id: str = "",
+        created_by: str = "", origin: str = "",
     ) -> Tuple[str, List[dict], List[dict], List[dict], str, dict]:
         from session_system_context import validate_system_context
 
@@ -7637,6 +7638,11 @@ class SessionManager:
             # latency on Windows when the volume is busy or being scanned.
             "authorized_dirs": [requested_work_dir or str(WORK_DIR)],
         }
+        # 归因字段：作用域 2（自己及自己创建）与"删除限本人"都依赖它。
+        if str(created_by or "").strip():
+            metadata["created_by"] = str(created_by).strip()
+        if str(origin or "").strip():
+            metadata["origin"] = str(origin).strip()
         if requested_work_dir:
             metadata["work_dir"] = requested_work_dir
         if requested_system_context:
