@@ -1119,7 +1119,9 @@ def _identity_tool_decision(
                 blocked,
                 "identity.directory_denied",
                 decision.request_digest,
-                {"directory_axis": axes_for(level).directory, "turn_actor": level},
+                {"directory_axis": axes_for(level).directory, "turn_actor": level,
+                 "identity_denial": {"denied_by": level, "rule": "identity.directory_denied",
+                                     "available_tools": []}},
             )
         allowed, rule, available = tool_decision(tool_name, level)
         if allowed:

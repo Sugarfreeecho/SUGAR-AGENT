@@ -240,3 +240,30 @@ def test_run_end_clears_turn_actor():
     sp.set_turn_actor("s-run", level="stranger", subject="ou_z", channel="feishu")
     svc._run({"session_id": "s-run", "run_id": "r1", "id": "o1", "request": {"_source": {"id": "feishu"}}}, {}, "tok")
     assert sp.turn_level("s-run") == "owner"        # 上一轮的低档位不会残留到下一轮
+
+
+def test_identity_denial_keeps_llm_text_neutral():
+    """拒绝记录会留在上下文：给模型的话不能写成"工具不可用"。"""
+    from agent_loop import _blocked_tool_result
+
+    row = _blocked_tool_result(
+        "write_file", {}, "call-1", "工具 write_file 超出当前身份（group）的可用范围；可用工具：read_file",
+        identity_denial={"denied_by": "group"},
+    )
+    assert row["identity_denial"] is True
+    assert row["turn_level"] == "group"
+    # UI/审计保留真实原因
+    assert "可用工具" in row["tool_detail_ui"]
+    # 模型侧中性化：不列受限清单、明确只作用于本轮
+    assert "只作用于本轮" in row["tool_detail_llm"]
+    assert "可用工具" not in row["tool_detail_llm"]
+    assert "没有被禁用" in row["tool_detail_llm"]
+
+
+def test_ordinary_denial_keeps_original_message():
+    from agent_loop import _blocked_tool_result
+
+    row = _blocked_tool_result("run_shell", {}, "call-2", "危险命令需人工审批")
+    assert row["identity_denial"] is False
+    assert row["tool_detail_llm"] == row["tool_detail_ui"]
+    assert "危险命令" in row["tool_detail_llm"]

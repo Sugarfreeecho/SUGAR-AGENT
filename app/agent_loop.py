@@ -778,9 +778,19 @@ def _blocked_tool_result(
     reason: str,
     *,
     paused: bool = False,
+    identity_denial: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     status = "paused" if paused else "blocked"
     message = f"Hook {status} `{tool_name}`: {reason}"
+    llm_message = message
+    if identity_denial:
+        # 身份档位只作用于本轮。给模型的话必须中性，否则拒绝记录会留在
+        # 上下文里，让后续更高权限的轮次误以为该工具永久不可用。
+        level = str(identity_denial.get("denied_by") or "")
+        llm_message = (
+            f"本轮身份为“{level}”，`{tool_name}` 未执行（权限档位不足）。"
+            "该限制只作用于本轮；工具本身没有被禁用，后续轮次会按新的发言者身份重新判定。"
+        )
     return {
         "type": "tool",
         "tool_name": tool_name,
@@ -788,9 +798,11 @@ def _blocked_tool_result(
         "tool_id": tool_id,
         "result": message,
         "tool_detail_log": message,
-        "tool_detail_llm": message,
+        "tool_detail_llm": llm_message,
         "tool_detail_ui": message,
         "result_for_log": message,
+        "identity_denial": bool(identity_denial),
+        "turn_level": str((identity_denial or {}).get("denied_by") or ""),
         "tool_failed": True,
         "tool_status": _tool_result_status(tool_name, message, failed=True),
     }
@@ -6839,7 +6851,8 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     hook_approval_spec = None
                 if sec_decision.outcome == DecisionOutcome.DENY:
                     return _blocked_tool_result(
-                        tool_name, tool_args, tool_id, sec_decision.reason
+                        tool_name, tool_args, tool_id, sec_decision.reason,
+                        identity_denial=dict(sec_decision.constraints.get("identity_denial") or {}) or None,
                     )
                 # Reconstruct/freeze the conversation only for an actual
                 # approval. Allowed tools have no consumer for this disk read.
