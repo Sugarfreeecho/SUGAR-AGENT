@@ -1869,8 +1869,11 @@ function markSessionResultComplete(sessionId, status, runId, runOrder) {
     if (typeof sessionStore !== 'undefined') {
         var sess = sessionStore.get(sid);
         if (sess) {
+            // Only a success terminal for the very run that failed may keep the
+            // failure (its own duplicate / replay). A newer run's success, or a
+            // versionless one, has to be able to clear the red dot.
             if (normalizedStatus === 'success' && sess.unread_result_status === 'failed'
-                && (!resultRunId || sess.unread_result_run_id === resultRunId)) {
+                && resultRunId && sess.unread_result_run_id === resultRunId) {
                 normalizedStatus = 'failed';
                 if (resultRunId && typeof sessionStore.recordConfirmedResult === 'function') {
                     sessionStore.recordConfirmedResult(sid, resultRunId, 'failed', runOrder);
@@ -2931,6 +2934,12 @@ var uiSlots = (function () {
 })();
 `,ds=`const ARCHIVED_SESSIONS_PAGE_SIZE = 20;
 
+// A metadata mutation that neither commits nor cancels (dropped request, tab
+// hidden mid-flight) must not reject every later snapshot forever: the sidebar
+// would keep drawing the pre-mutation state, e.g. a failure dot that the
+// server already resolved.
+const METADATA_MUTATION_TTL_MS = 15000;
+
 const sessionStore = {
     seq: 0,
     sessionsById: new Map(),
@@ -2958,6 +2967,7 @@ const sessionStore = {
     committedStateRevisionFloor: 0,
     metadataMutationSeq: 0,
     pendingMetadataMutations: new Set(),
+    metadataMutationStartedAt: new Map(),
     ui: {
         loadingSessions: false,
         loadingMessages: false,
@@ -2967,11 +2977,13 @@ const sessionStore = {
     beginMetadataMutation() {
         const token = ++this.metadataMutationSeq;
         this.pendingMetadataMutations.add(token);
+        this.metadataMutationStartedAt.set(token, Date.now());
         return token;
     },
 
     commitMetadataMutation(token, stateRevision) {
         this.pendingMetadataMutations.delete(token);
+        this.metadataMutationStartedAt.delete(token);
         // Every snapshot request allocated up to this point may have started
         // before the write committed, so it cannot overwrite the confirmed UI.
         this.committedSnapshotRequestFloor = Math.max(
@@ -2989,9 +3001,27 @@ const sessionStore = {
 
     cancelMetadataMutation(token) {
         this.pendingMetadataMutations.delete(token);
+        this.metadataMutationStartedAt.delete(token);
+    },
+
+    expireStaleMetadataMutations() {
+        if (this.pendingMetadataMutations.size === 0) return 0;
+        const now = Date.now();
+        let expired = 0;
+        this.pendingMetadataMutations.forEach((token) => {
+            const startedAt = Number(this.metadataMutationStartedAt.get(token) || 0);
+            if (!startedAt || now - startedAt < METADATA_MUTATION_TTL_MS) return;
+            this.pendingMetadataMutations.delete(token);
+            this.metadataMutationStartedAt.delete(token);
+            expired += 1;
+        });
+        return expired;
     },
 
     shouldAcceptSnapshot(snapshot) {
+        // Never let a leaked mutation block snapshots for good; a snapshot is
+        // the only way this tab can learn that a failure was superseded.
+        this.expireStaleMetadataMutations();
         if (this.pendingMetadataMutations.size > 0) return false;
         const requestSeq = Number((snapshot || {}).client_request_seq || 0);
         if (requestSeq > 0 && requestSeq <= this.committedSnapshotRequestFloor) return false;
@@ -3014,6 +3044,19 @@ const sessionStore = {
 
     inheritUnreadResult(session, previous) {
         const reconciled = Object.assign({}, session);
+        // A failure must be re-asserted by an explicit failed snapshot or a
+        // failed terminal. When the merge cannot prove which run wins, keep the
+        // server row's non-failure state instead of resurrecting the old dot:
+        // that is how a resolved failure used to stay red across snapshots.
+        const incomingFailed = !!(session && session.unread_result_status === 'failed');
+        const inheritedFailed = !!(previous && previous.unread_result_status === 'failed');
+        if (inheritedFailed && !incomingFailed) {
+            reconciled.unread_result = false;
+            delete reconciled.unread_result_at;
+            delete reconciled.unread_result_status;
+            delete reconciled.unread_result_run_id;
+            return reconciled;
+        }
         const fields = ['unread_result_at', 'unread_result_status', 'unread_result_run_id',
             'unread_result_run_order', 'unread_result_last_run_id'];
         reconciled.unread_result = !!(previous && previous.unread_result);

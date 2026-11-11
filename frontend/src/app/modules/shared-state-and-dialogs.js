@@ -188,8 +188,11 @@ function markSessionResultComplete(sessionId, status, runId, runOrder) {
     if (typeof sessionStore !== 'undefined') {
         var sess = sessionStore.get(sid);
         if (sess) {
+            // Only a success terminal for the very run that failed may keep the
+            // failure (its own duplicate / replay). A newer run's success, or a
+            // versionless one, has to be able to clear the red dot.
             if (normalizedStatus === 'success' && sess.unread_result_status === 'failed'
-                && (!resultRunId || sess.unread_result_run_id === resultRunId)) {
+                && resultRunId && sess.unread_result_run_id === resultRunId) {
                 normalizedStatus = 'failed';
                 if (resultRunId && typeof sessionStore.recordConfirmedResult === 'function') {
                     sessionStore.recordConfirmedResult(sid, resultRunId, 'failed', runOrder);

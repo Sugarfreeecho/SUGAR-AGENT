@@ -1029,9 +1029,28 @@ def _react_run_fence_owner(sid: str):
     return inspect_run_fence(path)
 
 
-def _is_recoverable_react_session(sid: str) -> bool:
-    """Check one session; a living writer is never an orphan."""
+def _session_is_archived(sid: str) -> bool:
+    reader = getattr(session_manager, "get_session_summary", None)
+    if not callable(reader):
+        return False
+    try:
+        summary = reader(sid)
+    except Exception:
+        return False
+    return bool(isinstance(summary, dict) and summary.get("archived"))
+
+
+def _evaluate_react_recovery(sid: str) -> bool:
+    """Decide one session with at most one Runtime snapshot hydration.
+
+    ``can_continue`` used to be asked twice and the snapshot was parsed three
+    times (candidate check, orphan cleanup, auto-resume check). A 40 MB
+    snapshot costs ~1s of C-level JSON work per parse, so the duplicated reads
+    dominated startup. The cleanup result is the interruption evidence the
+    auto-resume check needs, so it is reused instead of re-reading.
+    """
     from workflow_extensions import session_workflows
+
     sid = str(sid or "").strip()
     if (
         not sid
@@ -1042,6 +1061,8 @@ def _is_recoverable_react_session(sid: str) -> bool:
         return False
     owner = _react_run_fence_owner(sid)
     if owner.status in {"live", "unknown"}:
+        return False
+    if _session_is_archived(sid):
         return False
     # A complete visible turn has nothing to resume. Check the indexed UI
     # boundary before loading the full model/execution snapshot: startup used
@@ -1059,22 +1080,55 @@ def _is_recoverable_react_session(sid: str) -> bool:
         or _runtime_observability_active_runs_are_recent(sid, snapshot)
     ):
         return False
-    _cleanup_orphan_runtime_v2_active_runs(
-        sid, reason="no_local_activity", respect_grace=owner.status != "dead",
+    if _session_pending_human_count(sid) != 0:
+        return False
+    cleaned = _cleanup_orphan_runtime_v2_active_runs(
+        sid,
+        reason="no_local_activity",
+        respect_grace=owner.status != "dead",
+        snapshot=snapshot,
     )
-    return (
-        _session_pending_human_count(sid) == 0
-        and _runtime_v2_auto_resume_pending(sid)
-        and session_manager.can_continue_react_session(sid)
-    )
+    if cleaned:
+        # Cleanup just committed the durable interruption this run resumes from.
+        # Auto-resume would still veto an explicit user stop, so apply the same
+        # cheap guard here instead of re-reading the snapshot for it.
+        return not _session_was_manually_stopped(sid)
+    return bool(_runtime_v2_auto_resume_pending(sid, snapshot=snapshot))
+
+
+def _is_recoverable_react_session(sid: str) -> bool:
+    """Check one session; a living writer is never an orphan."""
+    return _evaluate_react_recovery(sid)
+
+
+def _iter_fenced_recovery_candidates():
+    """Yield sessions whose run fence outlived its owner.
+
+    A clean finish deletes ``active_run_fence.json``; a hard kill leaves it
+    behind. That makes the fence the exact set of interrupted sessions, so
+    discovery costs one directory listing plus a few stat calls instead of
+    hydrating every conversation in the library.
+    """
+    root = getattr(session_manager, "sessions_dir", None)
+    if not root:
+        return
+    base = Path(root)
+    try:
+        with os.scandir(base) as entries:
+            names = [entry.name for entry in entries if entry.is_dir()]
+    except OSError:
+        return
+    for name in names:
+        try:
+            if (base / name / "active_run_fence.json").is_file():
+                yield name
+        except OSError:
+            continue
 
 
 def _iter_recoverable_react_sessions():
     """Yield candidates as they are found, without holding up earlier ones."""
-    for row in session_manager.list_sessions(include_archived=False):
-        sid = str((row or {}).get("id") or "").strip()
-        if not sid:
-            continue
+    for sid in _iter_fenced_recovery_candidates():
         try:
             if _is_recoverable_react_session(sid):
                 yield sid
@@ -1245,6 +1299,67 @@ async def recover_react_session(session_id: str) -> bool:
         "Targeted ReAct recovery checked: session=%s scheduled=%s elapsed_ms=%d",
         sid, scheduled, int((time.perf_counter() - started_at) * 1000),
     )
+    return scheduled
+
+
+def _is_recoverable_after_reconcile(sid: str) -> bool:
+    """Resume decision for a run the startup reconciliation already orphaned.
+
+    Reconciliation proved that no live or foreign owner holds the run, so this
+    path skips the fence/grace gate and only asks whether the turn still needs
+    to finish. It keeps at most one Runtime snapshot hydration.
+    """
+    from workflow_extensions import session_workflows
+
+    sid = str(sid or "").strip()
+    if (
+        not sid
+        or _has_local_worker_activity(sid)
+        or int(_active_chat_by_session.get(sid, 0) or 0) > 0
+        or session_workflows.continuation_source(sid)
+        or _session_is_archived(sid)
+    ):
+        return False
+    can_continue = getattr(session_manager, "can_continue_react_session", None)
+    if callable(can_continue) and not can_continue(sid):
+        return False
+    if _session_pending_human_count(sid) != 0:
+        return False
+    snapshot = _runtime_v2_snapshot(sid)
+    if _cleanup_orphan_runtime_v2_active_runs(
+        sid, reason="orphaned", respect_grace=False, snapshot=snapshot,
+    ):
+        return not _session_was_manually_stopped(sid)
+    return bool(_runtime_v2_auto_resume_pending(sid, snapshot=snapshot))
+
+
+async def recover_orphaned_sessions(session_ids) -> list[str]:
+    """Schedule recovery for sessions the startup reconciliation orphaned.
+
+    A fence is deleted on a clean finish, so a run that lost its owner during a
+    graceful shutdown leaves no fence behind. The startup reconciliation still
+    sees its ``running`` row and marks it orphaned; feeding those ids here keeps
+    that path recoverable without re-sweeping the whole library.
+    """
+    scheduled: list[str] = []
+    seen: set[str] = set()
+    for raw in session_ids or ():
+        sid = str(raw or "").strip()
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        try:
+            recoverable = await asyncio.to_thread(_is_recoverable_after_reconcile, sid)
+        except Exception:
+            logger.debug("Orphan-fed ReAct recovery failed for %s", sid, exc_info=True)
+            continue
+        if recoverable and _schedule_react_recovery(sid):
+            scheduled.append(sid)
+    if seen:
+        logger.info(
+            "Orphan-fed ReAct recovery: candidates=%d scheduled=%d",
+            len(seen), len(scheduled),
+        )
     return scheduled
 
 
@@ -1485,6 +1600,7 @@ def _cleanup_orphan_runtime_v2_active_runs(
     reason: str = "orphaned",
     *,
     respect_grace: bool = True,
+    snapshot: Optional[dict] = None,
 ) -> int:
     try:
         from runtime_v2 import runtime_v2_primary
@@ -1503,18 +1619,26 @@ def _cleanup_orphan_runtime_v2_active_runs(
 
     with _steer_transaction(sid):
         return _cleanup_orphan_runtime_v2_active_runs_locked(
-            sid, reason=reason, respect_grace=respect_grace,
+            sid, reason=reason, respect_grace=respect_grace, snapshot=snapshot,
         )
 
 
 def _cleanup_orphan_runtime_v2_active_runs_locked(
-    sid: str, reason: str, *, respect_grace: bool,
+    sid: str,
+    reason: str,
+    *,
+    respect_grace: bool,
+    snapshot: Optional[dict] = None,
 ) -> int:
     owner = _react_run_fence_owner(sid)
     if owner.status in {"live", "unknown"}:
         logger.debug("Skip orphan cleanup for unresolved owner: session=%s pid=%s", sid, owner.pid)
         return 0
-    snapshot = _runtime_v2_snapshot(sid)
+    # The caller may already hold a snapshot for this decision. The owner was
+    # re-checked above under the same transaction, so a stale view cannot
+    # interrupt a run that another process has since claimed.
+    if not isinstance(snapshot, dict) or "active_runs" not in snapshot:
+        snapshot = _runtime_v2_snapshot(sid)
     active_runs = snapshot.get("active_runs") if isinstance(snapshot, dict) else None
     if not isinstance(active_runs, list) or not active_runs:
         return 0
@@ -1558,7 +1682,7 @@ def _runtime_v2_context_snapshot(sid: str) -> dict:
     return context if isinstance(context, dict) else {}
 
 
-def _runtime_v2_auto_resume_pending(sid: str) -> bool:
+def _runtime_v2_auto_resume_pending(sid: str, *, snapshot: Optional[dict] = None) -> bool:
     # A pending durable interaction is an intentional pause. Only the
     # interaction resolve/cancel path may append its tool result and resume.
     if _session_pending_human_count(sid) > 0:
@@ -1575,7 +1699,8 @@ def _runtime_v2_auto_resume_pending(sid: str) -> bool:
             return False
     except Exception:
         return False
-    snapshot = _runtime_v2_snapshot(sid)
+    if not isinstance(snapshot, dict) or "runs" not in snapshot:
+        snapshot = _runtime_v2_snapshot(sid)
     runs = snapshot.get("runs") if isinstance(snapshot, dict) else None
     if not isinstance(runs, dict) or not runs:
         return False
@@ -3853,7 +3978,10 @@ async def app_state(include_archived: bool = Query(False)):
 @fastapi_app.get("/runtime-v2/state")
 async def runtime_v2_state(include_archived: bool = Query(True)):
     """Read-only Runtime V2 debug state built from snapshots."""
-    return JSONResponse(content=_runtime_v2_debug_state(include_archived=include_archived))
+    # This hydrates one snapshot per session; never do it on the event loop.
+    return JSONResponse(
+        content=await asyncio.to_thread(_runtime_v2_debug_state, include_archived)
+    )
 
 
 @fastapi_app.get("/runtime-v2/sessions/{session_id}/events")
@@ -9330,6 +9458,9 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "OPENAI_MAX_INFLIGHT_REQUESTS",
             "NETWORK_RECONNECT_MAX_ATTEMPTS",
             "LOCAL_NETWORK_POLL_SECONDS",
+            "LOCAL_NETWORK_PROBE_TARGETS",
+            "LOCAL_DNS_PROBE_HOSTS",
+            "LOCAL_DNS_PROBE_TIMEOUT_SEC",
             "OPENAI_RETRY_BASE_SEC",
         ],
     ),
@@ -9467,11 +9598,14 @@ _ENV_HINTS: dict[str, str] = {
     "OPENAI_MAX_RETRIES": "显式可重试错误路径允许的请求尝试数（含首次），默认 4；全部计入统一请求总预算。",
     "OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC": "所有 Chat Completions 均在传输层等待首个有效 token；达到该秒数后追加一路并行 API 请求，首个有效 token 的连接胜出。非流式调用仅在上层缓冲赢家的完整结果；设为 0 关闭。",
     "OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES": "单次逻辑模型调用因慢响应最多追加的并行 API 请求数，默认 2；设为 0 关闭并行重试。",
-    "OPENAI_TOTAL_REQUEST_BUDGET": "单次逻辑模型调用中首 token hedge 与同模型错误重试共享的物理 API 请求总预算，默认 6；模型切换按候选链规则执行，不受该预算阻断或计数。",
+    "OPENAI_TOTAL_REQUEST_BUDGET": "单次逻辑模型调用中首 token hedge 与同模型错误重试共享的物理 API 请求总预算，默认 10；模型切换按候选链规则执行，不受该预算阻断或计数。",
     "OPENAI_TOTAL_DEADLINE_SEC": "单次逻辑模型调用包含全部并行与串行尝试的总截止时间（秒），默认 600。",
     "OPENAI_MAX_INFLIGHT_REQUESTS": "单次逻辑模型调用同时存在的 API 请求连接上限，默认 3。",
     "NETWORK_RECONNECT_MAX_ATTEMPTS": "模型网络错误的快速重连次数；本机离线时等待网络恢复，其他错误达到上限后进入常规模型回退。",
     "LOCAL_NETWORK_POLL_SECONDS": "本机断网后 Agent 沉睡期间的网络状态检测间隔秒数，默认 5，最小 1。",
+    "LOCAL_NETWORK_PROBE_TARGETS": "判断本机是否离线的 TCP 直连探测目标，逗号分隔 host:port，默认 1.1.1.1:443,8.8.8.8:53。",
+    "LOCAL_DNS_PROBE_HOSTS": "判断本机 DNS 解析是否可用的探测域名，逗号分隔，任一可解析即视为正常，默认 www.baidu.com,cloudflare.com。",
+    "LOCAL_DNS_PROBE_TIMEOUT_SEC": "单次 DNS 探测超时秒数，默认 1.5；解析不可用时 Agent 进入沉睡等待而不是逐个切换模型。",
     "OPENAI_RETRY_BASE_SEC": "重试基础退避时间（秒）。",
     "WORK_DIR": "工作区根目录（文件工具沙箱）。",
     "SKILLS_DIR": "技能包目录（默认可于 WORK_DIR 下）。",

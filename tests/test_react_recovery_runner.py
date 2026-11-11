@@ -12,17 +12,18 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 
-def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypatch):
+def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypatch, tmp_path):
     import webui
     from run_ownership import RunFenceOwner
     from workflow_extensions import session_workflows
 
-    cleaned = []
+    cleaned, candidates = [], ("current", "background", "running", "goal", "complete", "waiting")
+    for sid in candidates:
+        (tmp_path / sid).mkdir()
+        (tmp_path / sid / "active_run_fence.json").write_text("{}", encoding="utf-8")
 
     class FakeSessionManager:
-        def list_sessions(self, include_archived=False):
-            assert include_archived is False
-            return [{"id": sid} for sid in ("current", "background", "running", "goal", "complete", "waiting")]
+        sessions_dir = tmp_path
 
         def can_continue_react_session(self, sid):
             return sid in {"current", "background", "running", "goal", "waiting"}
@@ -38,29 +39,63 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
     monkeypatch.setattr(
         webui,
         "_cleanup_orphan_runtime_v2_active_runs",
-        lambda sid, reason, respect_grace: cleaned.append((sid, reason, respect_grace)) or 0,
+        lambda sid, reason, respect_grace, **_: cleaned.append((sid, reason, respect_grace)) or 0,
     )
     monkeypatch.setattr(webui, "_session_pending_human_count", lambda sid: 1 if sid == "waiting" else 0)
     monkeypatch.setattr(
         webui,
         "_runtime_v2_auto_resume_pending",
-        lambda sid: sid != "complete",
+        lambda sid, **_: sid != "complete",
     )
 
-    assert webui._discover_recoverable_react_sessions() == ["current", "background"]
+    assert sorted(webui._discover_recoverable_react_sessions()) == ["background", "current"]
     assert cleaned
     assert all(reason == "no_local_activity" and respect_grace is True for _, reason, respect_grace in cleaned)
 
 
-def test_recovery_scan_does_not_take_over_a_fresh_cross_process_run(monkeypatch):
+def test_fence_discovery_ignores_sessions_without_a_fence(monkeypatch, tmp_path):
+    import webui
+
+    (tmp_path / "finished").mkdir()
+    (tmp_path / "interrupted").mkdir()
+    (tmp_path / "interrupted" / "active_run_fence.json").write_text("{}", encoding="utf-8")
+
+    class FakeSessionManager:
+        sessions_dir = tmp_path
+
+    monkeypatch.setattr(webui, "session_manager", FakeSessionManager())
+
+    assert list(webui._iter_fenced_recovery_candidates()) == ["interrupted"]
+
+
+def test_orphan_feed_schedules_only_recoverable_sessions(monkeypatch):
+    import webui
+
+    scheduled = []
+    monkeypatch.setattr(
+        webui, "_is_recoverable_after_reconcile",
+        lambda sid: sid in {"orphan-a", "orphan-a"},
+    )
+    monkeypatch.setattr(webui, "_schedule_react_recovery", lambda sid: scheduled.append(sid) or True)
+
+    result = asyncio.run(
+        webui.recover_orphaned_sessions(["orphan-a", "orphan-a", "done", ""])
+    )
+
+    assert result == ["orphan-a"]
+    assert scheduled == ["orphan-a"]
+
+
+def test_recovery_scan_does_not_take_over_a_fresh_cross_process_run(monkeypatch, tmp_path):
     import webui
     from run_ownership import RunFenceOwner
     from workflow_extensions import session_workflows
 
+    (tmp_path / "foreign-live").mkdir()
+    (tmp_path / "foreign-live" / "active_run_fence.json").write_text("{}", encoding="utf-8")
+
     class FakeSessionManager:
-        def list_sessions(self, include_archived=False):
-            assert include_archived is False
-            return [{"id": "foreign-live"}]
+        sessions_dir = tmp_path
 
     monkeypatch.setattr(webui, "session_manager", FakeSessionManager())
     monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("absent"))
@@ -78,7 +113,7 @@ def test_recovery_scan_does_not_take_over_a_fresh_cross_process_run(monkeypatch)
     monkeypatch.setattr(
         webui,
         "_runtime_v2_auto_resume_pending",
-        lambda _sid: (_ for _ in ()).throw(AssertionError("fresh foreign run must not be resumed")),
+        lambda _sid, **_: (_ for _ in ()).throw(AssertionError("fresh foreign run must not be resumed")),
     )
 
     assert webui._discover_recoverable_react_sessions() == []
@@ -273,10 +308,10 @@ def test_dead_fence_owner_bypasses_heartbeat_grace(monkeypatch):
     )
     monkeypatch.setattr(
         webui, "_cleanup_orphan_runtime_v2_active_runs",
-        lambda sid, reason, respect_grace: cleanup_calls.append((sid, reason, respect_grace)) or 1,
+        lambda sid, reason, respect_grace, **_: cleanup_calls.append((sid, reason, respect_grace)) or 1,
     )
     monkeypatch.setattr(webui, "_session_pending_human_count", lambda _sid: 0)
-    monkeypatch.setattr(webui, "_runtime_v2_auto_resume_pending", lambda _sid: True)
+    monkeypatch.setattr(webui, "_runtime_v2_auto_resume_pending", lambda _sid, **_: True)
 
     assert webui._is_recoverable_react_session("old") is True
     assert cleanup_calls == [("old", "no_local_activity", False)]

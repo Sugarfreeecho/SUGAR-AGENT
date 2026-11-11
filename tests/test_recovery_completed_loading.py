@@ -17,11 +17,12 @@ def test_completed_visible_turn_skips_full_snapshot_and_recovery(monkeypatch):
         '_has_local_worker_activity': lambda _: False,
         '_active_chat_by_session': {},
         '_react_run_fence_owner': lambda _: SimpleNamespace(status='absent'),
+        '_session_is_archived': lambda _: False,
         '_runtime_v2_snapshot': forbidden,
         '_cleanup_orphan_runtime_v2_active_runs': forbidden,
         '_runtime_v2_auto_resume_pending': forbidden,
     }
-    read = real_function('app/webui.py', '_is_recoverable_react_session', namespace)
+    read = real_function('app/webui.py', '_evaluate_react_recovery', namespace)
     assert read('completed') is False
     assert checked == ['completed']
 
@@ -36,4 +37,4 @@ def test_live_or_unknown_owner_is_rejected_before_history_read(monkeypatch):
             '_active_chat_by_session': {},
             '_react_run_fence_owner': lambda _: SimpleNamespace(status=status),
         }
-        assert real_function('app/webui.py', '_is_recoverable_react_session', namespace)('foreign') is False
+        assert real_function('app/webui.py', '_evaluate_react_recovery', namespace)('foreign') is False
