@@ -258,6 +258,38 @@ def test_identity_denial_keeps_llm_text_neutral():
     assert "只作用于本轮" in row["tool_detail_llm"]
     assert "可用工具" not in row["tool_detail_llm"]
     assert "没有被禁用" in row["tool_detail_llm"]
+    assert "tool_status" in row["tool_detail_llm"]
+
+
+def test_tool_status_tool_is_readable_at_every_level():
+    from agent_tools import OPENAI_TOOL_DEFINITIONS
+
+    names = {row["function"]["name"] for row in OPENAI_TOOL_DEFINITIONS}
+    assert "tool_status" in names
+    assert "tool_status" in sp.READ_TOOLS
+    assert sp.tool_decision("tool_status", "group")[0] is True
+
+
+def test_tool_status_reports_level_and_scope():
+    import asyncio
+    import json
+
+    from builtin_host_tools import _invoke_tool_status
+
+    class Context:
+        session_id = "s-status"
+
+    sp.set_turn_actor("s-status", level="private", subject="ou_1", channel="feishu")
+    try:
+        outcome = asyncio.run(_invoke_tool_status(Context(), {}))
+        payload = json.loads(outcome.content)
+        assert payload["level"] == "private"
+        assert payload["axes"] == {"control": 3, "tools": 3, "scope": 2, "directory": 2}
+        assert "工具" not in payload["note"] or "本轮" in payload["note"]
+        detail = json.loads(asyncio.run(_invoke_tool_status(Context(), {"tool": "write_file"})).content)
+        assert detail["allowed"] is True and detail["tool"] == "write_file"
+    finally:
+        sp.clear_turn_actor("s-status")
 
 
 def test_ordinary_denial_keeps_original_message():

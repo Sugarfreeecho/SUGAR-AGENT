@@ -4616,6 +4616,16 @@ def task(
 
 OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     _openai_function_schema(
+        "tool_status",
+        "Check what this turn may use: current identity level and the tools it can call right now. "
+        "Permission is decided per turn, so a past denial does not mean a tool is unavailable now — "
+        "call this instead of assuming, before giving up on a tool.",
+        {
+            "tool": {"type": "string", "description": "Optional tool name to check. Omit to list everything available this turn."},
+        },
+        [],
+    ),
+    _openai_function_schema(
         "request_restart",
         "Request a user-confirmed restart of this Agent backend after changing backend code or configuration. "
         "Call this as the only tool in the assistant turn. Explain the reason, changes and what to verify afterwards. "

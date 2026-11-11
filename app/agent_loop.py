@@ -789,7 +789,8 @@ def _blocked_tool_result(
         level = str(identity_denial.get("denied_by") or "")
         llm_message = (
             f"本轮身份为“{level}”，`{tool_name}` 未执行（权限档位不足）。"
-            "该限制只作用于本轮；工具本身没有被禁用，后续轮次会按新的发言者身份重新判定。"
+            "该限制只作用于本轮；工具本身没有被禁用。需要确认现在能用什么，请调用 `tool_status`，"
+            "不要根据这条历史记录判断工具是否可用。"
         )
     return {
         "type": "tool",

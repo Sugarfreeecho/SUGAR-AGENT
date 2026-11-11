@@ -50,7 +50,7 @@ MATRIX: dict[str, Axes] = {
 READ_TOOLS = frozenset({
     "read_file", "ls", "glob", "grep", "web_search", "web_fetch",
     "tool_search", "tool_describe", "show_user", "ask_user",
-    "history_context", "scheduled_tasks", "agent_browser_get_context",
+    "history_context", "scheduled_tasks", "tool_status", "agent_browser_get_context",
 })
 
 # 控制面方法 → 所需"会话控制"档；未列出的方法按 4 档处理（fail closed）。
@@ -232,5 +232,5 @@ def denial_payload(tool_name: str, level: object, rule: str) -> dict:
         "axes": axes_for(normalized).as_dict(),
         "available_tools": available_tools(normalized),
         "hint": "该身份无权调用此工具；限制只作用于本轮，下一轮按新的发言者身份重新判定。"
-                "如需提权，请让机主把发起者加入白名单或改用本机入口。",
+                "需要确认当前可用范围时调用 `tool_status`；如需提权，请让机主把发起者加入白名单或改用本机入口。",
     }

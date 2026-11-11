@@ -197,6 +197,7 @@
 | 审批卡片带 `turn_actor`（等级/主体/渠道） | `app/tool_approval_gate.py::approval_turn_actor` |
 | 轮次身份不残留：每轮派发覆盖写入，运行结束即清除 | `service._apply_turn_actor`、`service._run` 的 finally |
 | 拒绝记录不污染上下文：模型侧文本中性化（只说"本轮未执行、工具未禁用"），真实原因只留在 UI/审计 | `agent_loop._blocked_tool_result` |
+| `tool_status` 工具：模型随时查询本轮身份、四轴档位与可用工具；拒绝文案改为指向它 | `agent_tools.py`、`builtin_host_tools.py` |
 
 待落地：
 

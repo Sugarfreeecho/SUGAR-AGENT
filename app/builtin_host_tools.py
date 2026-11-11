@@ -151,6 +151,28 @@ async def _invoke_context_manage(
     return ToolOutcome.failed("invalid_context_mode", message, content=message)
 
 
+async def _invoke_tool_status(
+    context: HostToolInvocationContext,
+    arguments: Mapping[str, Any],
+) -> ToolOutcome:
+    """本轮能调用哪些工具。权限按身份逐轮判定，历史里的拒绝不代表现在不可用。"""
+    from session_permissions import available_tools, axes_for, tool_decision, turn_level
+
+    level = turn_level(context.session_id)
+    wanted = str(arguments.get("tool") or "").strip()
+    payload: dict[str, Any] = {
+        "level": level,
+        "axes": axes_for(level).as_dict(),
+        "note": "权限只作用于当前轮；下一轮按新的发言者身份重新判定。",
+    }
+    if wanted:
+        allowed, rule, available = tool_decision(wanted, level)
+        payload.update({"tool": wanted, "allowed": allowed, "rule": rule, "available_tools": available})
+    else:
+        payload["available_tools"] = available_tools(level)
+    return ToolOutcome.completed(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+
+
 async def _invoke_history_context(
     context: HostToolInvocationContext,
     arguments: Mapping[str, Any],
@@ -302,6 +324,17 @@ def register_builtin_host_tools() -> None:
                 effect="read",
                 parallel_safe=True,
                 pressure_limited=True,
+                early_stream_safe=True,
+                interruptibility="safe",
+            ),
+        )
+    if not host_tool_invokers.has("tool_status"):
+        host_tool_invokers.register(
+            "tool_status",
+            _invoke_tool_status,
+            policy=ToolExecutionPolicy(
+                effect="read",
+                parallel_safe=True,
                 early_stream_safe=True,
                 interruptibility="safe",
             ),
