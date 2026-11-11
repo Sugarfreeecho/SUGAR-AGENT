@@ -195,6 +195,7 @@
 | 飞书入站档位：允许名单 → 白名单，私聊 → private，群 → group（`FEISHU_INBOUND_LEVEL`） | `plugins/feishu-transport/feishu_transport/{config,adapter}.py` |
 | 本机访问令牌：`/sessions*` 写操作拦跨站；`MYAGENT_LOCAL_TOKEN_STRICT=1` 时要求 `X-MyAgent-Local-Token` 或 cookie | `app/local_access.py`、`webui.py` 中间件 |
 | 审批卡片带 `turn_actor`（等级/主体/渠道） | `app/tool_approval_gate.py::approval_turn_actor` |
+| 轮次身份不残留：每轮派发覆盖写入，运行结束即清除 | `service._apply_turn_actor`、`service._run` 的 finally |
 
 待落地：
 

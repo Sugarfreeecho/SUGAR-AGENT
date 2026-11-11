@@ -231,5 +231,6 @@ def denial_payload(tool_name: str, level: object, rule: str) -> dict:
         "rule": rule,
         "axes": axes_for(normalized).as_dict(),
         "available_tools": available_tools(normalized),
-        "hint": "该身份无权调用此工具；如需提权，请让机主把发起者加入白名单或改用本机入口。",
+        "hint": "该身份无权调用此工具；限制只作用于本轮，下一轮按新的发言者身份重新判定。"
+                "如需提权，请让机主把发起者加入白名单或改用本机入口。",
     }

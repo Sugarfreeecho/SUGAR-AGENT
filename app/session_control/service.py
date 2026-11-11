@@ -293,6 +293,20 @@ class SessionControlService:
         key = actor_key(level=fields["level"], subject=fields["subject"], channel=fields["channel"])
         return bool(current.get("key")) and current["key"] == key
 
+    def _apply_turn_actor(self, principal, params, sid):
+        """每轮开始都覆盖写入身份。
+
+        缺省写 owner：本机 UI / 未声明身份的调用不会继承上一轮的低档位，
+        避免筛下来的权限残留到下一轮。
+        """
+        from session_permissions import set_turn_actor
+
+        fields = self._actor_fields(principal, params) or {
+            "level": "owner", "subject": str(principal.id or ""), "channel": "",
+            "label": str(principal.name or ""),
+        }
+        return set_turn_actor(sid, **fields)
+
     async def _read(self, principal, method, p):
         sid = p.get("session_id", "")
         if method == "system.health":
@@ -909,10 +923,7 @@ class SessionControlService:
             with local_step('authorize'):
                 self.authorize(principal, op["method"], p)
             # 当轮身份：只影响本轮的工具与目录判定，不写入会话权限配置。
-            actor = self._actor_fields(principal, p)
-            if actor:
-                from session_permissions import set_turn_actor
-                set_turn_actor(sid, **actor)
+            self._apply_turn_actor(principal, p, sid)
             if p.get("_source_lifecycle") and p.get("_source", {}).get("id") not in self.callbacks.get("source_before_run", {}):
                 return  # Restored domain inputs wait for their lifecycle adapter.
             with local_step('load_metadata'):
@@ -994,6 +1005,9 @@ class SessionControlService:
         except BaseException as exc:
             self.store.update_operation(op["id"], status="unknown", error={"code": "worker_interrupted", "message": str(exc)})
         finally:
+            # 轮次结束即清身份：卡片、审计仍按当时的记录，但下一轮重新判定。
+            from session_permissions import clear_turn_actor
+            clear_turn_actor(op["session_id"])
             hook = self.callbacks.get("source_after_run", {}).get(op["request"].get("_source", {}).get("id"))
             if hook:
                 try:

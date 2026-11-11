@@ -200,3 +200,43 @@ def test_directory_axis_one_denies_any_write():
     decision = SecurityDecision(DecisionOutcome.ALLOW, "", "app_restricted.write", "d")
     assert "目录档为 1" in _directory_denial(1, decision, CapabilityRequest("fs.write", "", "write"))
     assert _directory_denial(1, decision, CapabilityRequest("fs.read", "", "read")) == ""
+
+
+def test_new_turn_without_level_overwrites_stale_actor():
+    from session_control.service import SessionControlService
+
+    class Principal:
+        admin = False
+        id = "local-ui"
+        name = "ui"
+
+    svc = object.__new__(SessionControlService)
+    sp.set_turn_actor("s-stale", level="stranger", subject="ou_x", channel="feishu")
+    svc._apply_turn_actor(Principal(), {"_source": {"id": "feishu"}}, "s-stale")
+    assert sp.turn_level("s-stale") == "owner"      # 机主轮次不会被上一轮的低档位拖住
+    sp.set_turn_actor("s-stale", level="group", subject="ou_y", channel="feishu")
+    svc._apply_turn_actor(Principal(), {"_level": "private", "_subject": "ou_y"}, "s-stale")
+    assert sp.turn_level("s-stale") == "private"
+    sp.clear_turn_actor("s-stale")
+
+
+def test_run_end_clears_turn_actor():
+    from session_control.service import SessionControlService
+
+    class Store:
+        def update_operation(self, *args, **kwargs):
+            return True
+
+    class Coordinator:
+        def release(self, *args, **kwargs):
+            return None
+
+    svc = object.__new__(SessionControlService)
+    svc.store = Store()
+    svc.coordinator = Coordinator()
+    svc.callbacks = {}
+    svc._run_owned = lambda op, cfg: None
+
+    sp.set_turn_actor("s-run", level="stranger", subject="ou_z", channel="feishu")
+    svc._run({"session_id": "s-run", "run_id": "r1", "id": "o1", "request": {"_source": {"id": "feishu"}}}, {}, "tok")
+    assert sp.turn_level("s-run") == "owner"        # 上一轮的低档位不会残留到下一轮
