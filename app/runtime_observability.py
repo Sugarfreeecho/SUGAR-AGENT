@@ -45,6 +45,24 @@ _FULL_SCAN_INTERVAL_SEC = max(
     float(os.getenv("RUNTIME_OBSERVABILITY_FULL_SCAN_SECONDS", "60")),
 )
 _last_full_scan_monotonic = 0.0
+# A full sweep is required to catch rows written by another process, but
+# reading every file in one call blocks the watchdog for seconds on a large
+# library. The sweep is sliced so one call stays bounded while a complete pass
+# still finishes inside one interval.
+_SWEEP_SLICES = max(1, int(os.getenv("RUNTIME_OBSERVABILITY_SWEEP_SLICES", "4")))
+_SWEEP_MIN_BATCH = 20
+_sweep_paths: list[Path] = []
+_sweep_cursor = 0
+# Walking the session tree dominated some sweeps (seconds under disk load).
+# The tree only changes when a session or subagent directory is added, so the
+# listing is reused until the root mtime moves or the TTL expires.
+_PATH_CACHE_TTL_SEC = max(
+    0.0,
+    float(os.getenv("RUNTIME_OBSERVABILITY_PATH_CACHE_SECONDS", "600")),
+)
+_path_cache: list[Path] = []
+_path_cache_key: tuple = ()
+_path_cache_at = 0.0
 
 
 def _now() -> str:
@@ -65,6 +83,7 @@ def configure(
     path_resolver: Optional[Callable[[str], str | Path]] = None,
 ) -> None:
     global _sessions_root, _path_resolver, _last_full_scan_monotonic, _configuration_epoch
+    global _sweep_paths, _sweep_cursor, _path_cache, _path_cache_key, _path_cache_at
     with _lock:
         _flush_all_locked()
         for timer in _flush_timers.values():
@@ -75,6 +94,11 @@ def configure(
         _versions.clear()
         _configuration_epoch += 1
         _active_runs.clear()
+        _sweep_paths = []
+        _sweep_cursor = 0
+        _path_cache = []
+        _path_cache_key = ()
+        _path_cache_at = 0.0
         _sessions_root = Path(sessions_root)
         _path_resolver = path_resolver
         _last_full_scan_monotonic = 0.0
@@ -416,23 +440,70 @@ def _observability_paths(root: Optional[Path]) -> list[Path]:
     return paths
 
 
+def _session_tree_signature(root: Optional[Path]) -> tuple:
+    """Cheap change signal for the session tree: adding a session moves mtime."""
+    if root is None:
+        return ()
+    try:
+        stat = root.stat()
+    except OSError:
+        return ()
+    return (str(root), int(stat.st_mtime_ns))
+
+
 def _stale_scan_paths() -> list[Path]:
-    """Scan active sessions normally and periodically reconcile all files."""
-    global _last_full_scan_monotonic
+    """Return the files this tick should read.
+
+    Steady state only needs sessions with a locally active run. Once per
+    interval the sweep also has to revisit persisted files, because another
+    process may have died and left a ``running`` row behind. That sweep used to
+    hand every file to one call; it is now sliced so each tick stays bounded
+    while a complete pass still finishes inside the interval.
+    """
+    global _last_full_scan_monotonic, _sweep_paths, _sweep_cursor
+    global _path_cache, _path_cache_key, _path_cache_at
+    now = time.monotonic()
     with _lock:
-        now = time.monotonic()
-        full_scan = (
+        root = _sessions_root
+        active = tuple(_active_runs)
+        sweep_done = _sweep_cursor >= len(_sweep_paths)
+        due = (
             _last_full_scan_monotonic <= 0
             or now - _last_full_scan_monotonic >= _FULL_SCAN_INTERVAL_SEC
         )
-        if full_scan:
+        start_sweep = sweep_done and due
+    if start_sweep:
+        key = _session_tree_signature(root)
+        with _lock:
+            cache_fresh = bool(_path_cache) and key == _path_cache_key and (
+                _PATH_CACHE_TTL_SEC <= 0 or now - _path_cache_at < _PATH_CACHE_TTL_SEC
+            )
+            cached = list(_path_cache)
+        if cache_fresh:
+            fresh = cached
+        else:
+            # Enumeration walks the session tree; never do it while holding the
+            # lock that live heartbeats need.
+            fresh = _observability_paths(root)
+            with _lock:
+                _path_cache = fresh
+                _path_cache_key = key
+                _path_cache_at = now
+        with _lock:
+            _sweep_paths = fresh
+            _sweep_cursor = 0
             _last_full_scan_monotonic = now
-        root = _sessions_root
-        active = tuple(_active_runs)
-    if full_scan:
-        return _observability_paths(root)
     paths: list[Path] = []
     seen: set[Path] = set()
+    with _lock:
+        if _sweep_paths and _sweep_cursor < len(_sweep_paths):
+            batch = max(_SWEEP_MIN_BATCH, -(-len(_sweep_paths) // _SWEEP_SLICES))
+            slice_paths = _sweep_paths[_sweep_cursor:_sweep_cursor + batch]
+            _sweep_cursor += len(slice_paths)
+            for path in slice_paths:
+                if path not in seen:
+                    seen.add(path)
+                    paths.append(path)
     for session_id, _ in active:
         path = _path(session_id)
         if path not in seen and path.exists():
