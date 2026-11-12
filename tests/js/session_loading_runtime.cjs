@@ -198,6 +198,24 @@ async function main() {
   );
   assert.equal(backfillRequests.length, 2, 'a page already starting at a user row issues no extra request');
   assert.deepEqual(alreadyAtUser.map(event => event.content), ['u1']);
+  const alignedContinuation = await backfillContext.backfillInitialTurnEvents(
+    's',
+    [{ type: 'status', content: 'goal step' }],
+    { range_start: 300, has_older: true, total: 500, turn_aligned: true },
+    null,
+    null
+  );
+  assert.equal(backfillRequests.length, 2, 'a server-aligned Goal continuation run must not trigger backfill');
+  assert.deepEqual(alignedContinuation.map(event => event.content), ['goal step']);
+  const exactRunStart = await backfillContext.backfillInitialTurnEvents(
+    's',
+    [{ type: 'status', content: 'goal step at run start' }],
+    { range_start: 300, has_older: true, total: 500, turn_aligned: false, alignment_kind: 'run' },
+    null,
+    null
+  );
+  assert.equal(backfillRequests.length, 2, 'an exact Goal run-start boundary must not trigger backfill either');
+  assert.deepEqual(exactRunStart.map(event => event.content), ['goal step at run start']);
   process.stdout.write('session loading runtime checks passed\n');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -488,6 +488,7 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             page = projection.read_ui_page("s1", limit=200, align_to_turn=True)
             self.assertEqual(page["range_start"], 3)
             self.assertTrue(page["turn_aligned"])
+            self.assertEqual(page["alignment_kind"], "user")
             self.assertEqual(page["requested_range_start"], 105)
             self.assertEqual(len(page["events"]), 302)
             self.assertEqual(page["events"][0]["content"], "dense")
@@ -528,6 +529,42 @@ class RuntimeUiProjectionTests(unittest.TestCase):
             self.assertEqual(older["range_start"], 0)
             self.assertEqual(older["range_end"], 142)
             self.assertEqual(older["events"][0]["content"], "older")
+
+    def test_tail_window_keeps_a_goal_continuation_run_without_a_user_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.append("s1", "run_started", {}, run_id="goal-run-1")
+            mirror.append("s1", "message_user", {"content": "goal prompt"}, run_id="goal-run-1")
+            mirror.append("s1", "message_assistant_final", {"content": "step one"}, run_id="goal-run-1")
+            mirror.append("s1", "run_finished", {}, run_id="goal-run-1")
+            mirror.append("s1", "run_started", {}, run_id="goal-run-2")
+            for index in range(300):
+                mirror.append(
+                    "s1", "ui_event",
+                    {"type": "status", "content": f"goal step {index}"},
+                    run_id="goal-run-2",
+                )
+            mirror.append("s1", "message_assistant_final", {"content": "goal done"}, run_id="goal-run-2")
+            projection = RuntimeUiProjection(tmp)
+
+            page = projection.read_ui_page("s1", limit=200, align_to_turn=True)
+
+            # A Goal continuation starts a new run without a user row. Keep
+            # that run's first row instead of rewinding to the goal prompt
+            # (which would load the entire goal history).
+            self.assertEqual(page["range_start"], 2)
+            self.assertEqual(page["range_end"], 303)
+            self.assertEqual(len(page["events"]), 301)
+            self.assertEqual(page["events"][0]["type"], "status")
+            self.assertEqual(page["events"][0]["content"], "goal step 0")
+            self.assertFalse(any(event["type"] == "user" for event in page["events"]))
+            self.assertEqual(page["events"][-1]["content"], "goal done")
+            self.assertEqual(page["alignment_kind"], "run")
+
+            exact = projection.read_ui_page("s1", limit=301, align_to_turn=True)
+            self.assertEqual(exact["range_start"], 2)
+            self.assertFalse(exact["turn_aligned"])
+            self.assertEqual(exact["alignment_kind"], "run")
 
     def test_pages_by_turns_backfill_when_runtime_projection_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:

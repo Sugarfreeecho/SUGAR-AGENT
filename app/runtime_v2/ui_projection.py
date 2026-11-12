@@ -1231,7 +1231,9 @@ class RuntimeUiProjection:
         users = set(index.get("user_indices") or [])
         # Reuse the exact paging contract on metadata, never on full payloads.
         page = self._page_events(
-            [{"type": "user" if pos in users else ""} for pos in range(total)], **options
+            [{"type": "user" if pos in users else "", "run_id": run_ids[pos]}
+             for pos in range(total)],
+            **options,
         )
         if diagnostics is not None and page.get("turn_aligned"):
             diagnostics.update(turn_aligned=True,
@@ -1836,6 +1838,10 @@ class RuntimeUiProjection:
             i for i, ev in enumerate(events)
             if isinstance(ev, dict) and ev.get("type") == "user"
         ]
+        run_ids = [
+            str(ev.get("run_id") or "") if isinstance(ev, dict) else ""
+            for ev in events
+        ]
         lim = max(1, min(int(limit), 500))
 
         if after_index is not None:
@@ -1924,13 +1930,42 @@ class RuntimeUiProjection:
             # whole earlier session); otherwise move back to the owning user
             # row and keep that whole turn even when it exceeds the event cap.
             # Callers that do not request alignment keep the exact cursor.
-            next_users = [index for index in user_indices if start < index < end]
-            if next_users:
-                start = next_users[0]
+            run_start = None
+            run_id = run_ids[start] if start < len(run_ids) else ""
+            if run_id:
+                run_start = start
+                while run_start > 0 and run_ids[run_start - 1] == run_id:
+                    run_start -= 1
+            if run_start is not None:
+                users_in_run = [
+                    index for index in user_indices
+                    if run_start <= index < start
+                ]
+                if not users_in_run:
+                    # Goal continuations start a new run without a user row.
+                    # Keep that run's first row instead of walking back to
+                    # the original goal prompt (or the whole goal history).
+                    start = run_start
+                else:
+                    next_users = [index for index in user_indices if start < index < end]
+                    if next_users:
+                        start = next_users[0]
+                    else:
+                        start = users_in_run[-1]
             else:
-                before_users = [index for index in user_indices if index < start]
-                if before_users:
-                    start = before_users[-1]
+                next_users = [index for index in user_indices if start < index < end]
+                if next_users:
+                    start = next_users[0]
+                else:
+                    before_users = [index for index in user_indices if index < start]
+                    if before_users:
+                        start = before_users[-1]
+        alignment_kind = "none"
+        if start < total:
+            if isinstance(events[start], dict) and events[start].get("type") == "user":
+                alignment_kind = "user"
+            elif run_ids[start] and (start == 0 or run_ids[start - 1] != run_ids[start]):
+                alignment_kind = "run"
         return {
             "events": events[start:end],
             "total": total,
@@ -1940,4 +1975,5 @@ class RuntimeUiProjection:
             "has_newer": end < total,
             "requested_range_start": requested_start,
             "turn_aligned": start != requested_start,
+            "alignment_kind": alignment_kind,
         }

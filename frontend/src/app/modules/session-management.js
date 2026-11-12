@@ -2402,6 +2402,10 @@ async function fetchSessionHistoryJSON(url, signal, loadingTrace) {
 async function backfillInitialTurnEvents(sessionId, events, pageMeta, signal, loadingTrace) {
     var merged = Array.isArray(events) ? events : [];
     if (!pageMeta || !pageMeta.has_older || !merged.length) return merged;
+    // The server already chose a valid boundary (a user row or a Goal
+    // continuation run). Do not walk further back just because no user row
+    // exists in a continuation run.
+    if (pageMeta.turn_aligned || pageMeta.alignment_kind === 'run') return merged;
     var startsAtUser = function () {
         return !!(merged[0] && merged[0].type === 'user');
     };
@@ -2600,6 +2604,8 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                 has_newer: raw.has_newer == null ? pageRangeEnd < pageTotal : !!raw.has_newer,
                 manual_history: manualHistory,
                 event_limited_tail: !!raw.event_limited_tail,
+                turn_aligned: !!raw.turn_aligned,
+                alignment_kind: String(raw.alignment_kind || ''),
             };
             uiEventCountCache.updateFromServer(sessionId, pageMeta.total);
         } else {
