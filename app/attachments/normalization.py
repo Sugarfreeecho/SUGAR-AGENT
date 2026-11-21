@@ -36,8 +36,11 @@ def dimensions(width, height, max_pixels, max_dimension=8192):
 
 
 def normalize_image(data, media_type, limits=None, policy=None, max_dimension=8192):
-    image, _ = decode_image(data, media_type, limits)
+    image, actual = decode_image(data, media_type, limits)
     policy = policy or ImageRequestPolicy()
+    if _can_pass_through(image, actual, data, policy, max_dimension):
+        # 已在预算内且无需转码：直接复用原始字节（对齐 Claude Code 的 early-return）。
+        return data, actual, image.size, image.size
     image = ImageOps.exif_transpose(image)
     original = image.size
     alpha = "A" in image.getbands() or "transparency" in image.info
@@ -64,6 +67,24 @@ def normalize_image(data, media_type, limits=None, policy=None, max_dimension=81
         raise
     except Exception:
         raise AttachmentError("Could not normalize image to 8-bit sRGB", "ATTACHMENT_WRITE_FAILED") from None
+
+
+def _can_pass_through(image, media_type, data, policy, max_dimension):
+    """判断原图能否原样入库。
+
+    只放行 JPEG/WebP：PNG 透传会改变附件扩展名契约（导出/导入按 .jpg/.webp 归档），
+    且 PNG 截图重编码成本远低于 WebP effort 搜索，收益不对等。
+    """
+    if media_type not in {"image/jpeg", "image/webp"}:
+        return False
+    if image.mode not in {"RGB", "RGBA"} or getattr(image, "n_frames", 1) != 1:
+        return False
+    if image.info.get("icc_profile") or image.getexif():
+        return False
+    width, height = image.size
+    if width * height > policy.max_pixels or max(width, height) > max_dimension:
+        return False
+    return len(data) <= policy.max_bytes
 
 
 def verify_normalized(data, media_type, size, alpha):

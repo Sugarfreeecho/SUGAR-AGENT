@@ -402,21 +402,21 @@ def test_legacy_budget_alias_warns_and_new_setting_takes_precedence(monkeypatch)
 
 
 def test_encoding_uses_first_fit_or_smallest_quality_result():
-    from attachments.encoding import encode_image
+    from attachments.encoding import QUALITIES, encode_image
     class Encoder:
         mode = "RGB"
         calls = []
         def save(self, output, *, quality, **kwargs):
             self.calls.append(quality)
             # Encoded sizes need not decrease monotonically with quality.
-            output.write(b"x" * {90: 90, 80: 60, 70: 70, 60: 20, 50: 40, 40: 30}[quality])
+            output.write(b"x" * {85: 90, 75: 60, 60: 20}[quality])
     image = Encoder()
     data, _ = encode_image(image, 65)
-    assert image.calls == [90, 80]
+    assert image.calls == [85, 75]
     assert len(data) == 60
     image.calls = []
     data, _ = encode_image(image, 1)
-    assert len(image.calls) == 6
+    assert len(image.calls) == len(QUALITIES)
     assert len(data) == 20
 
 
@@ -432,3 +432,28 @@ def test_request_resize_can_remove_ineffective_alpha(store):
     assert version.media_type == "image/jpeg"
     assert not version.has_alpha
     assert store.read_request_image_sync(ref, policy).data == version.data
+
+
+def test_save_path_reuses_source_hash_without_reencoding(store, monkeypatch):
+    """同一文件重复读：第二次命中源哈希索引，不再走归一化。"""
+    import attachments.local as local
+    calls = []
+    original = local.normalize_image
+    monkeypatch.setattr(local, "normalize_image",
+                        lambda *args, **kwargs: (calls.append(1), original(*args, **kwargs))[1])
+    path = store.root.parents[2] / "shot.png"
+    path.write_bytes(picture(size=(300, 200)))
+    first = store.save_path(path)
+    assert len(calls) == 1
+    second = store.save_path(path)
+    assert second["attachmentId"] == first["attachmentId"]
+    assert len(calls) == 1
+
+
+def test_in_budget_jpeg_is_stored_verbatim(store):
+    """预算内的 JPEG 原样入库，不再解码重编码。"""
+    data = picture(size=(320, 240), format="JPEG")
+    ref = store.save_images_sync([SaveImageAttachment(data, "image/jpeg")])[0]
+    assert ref["mediaType"] == "image/jpeg"
+    assert ref["bytes"] == len(data)
+    assert store.read_image_sync(ref).data == data

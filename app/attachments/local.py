@@ -81,23 +81,65 @@ class LocalAttachmentStore:
             raise AttachmentError("Invalid file name", "INVALID_ATTACHMENT_REF")
         return str(self._object_dir(ref["attachmentId"]) / "files" / ref["name"])
 
+    def _source_index_path(self, source_id):
+        """源字节哈希 -> 已归一化 ref 的小索引，避免重复读图二次编码。
+
+        放在 ``_sources`` 命名空间，对象目录只接受 64 位十六进制 id，二者不会冲突，
+        ``occupied_bytes`` 的 ``image.*`` 扫描也不会把索引计入配额。
+        """
+        key = checked_id(source_id)
+        return self.root / "_sources" / key[:2] / (key[2:] + ".json")
+
+    def _source_hit(self, source_id):
+        """返回命中且对象完好的 ref；任何异常都视为未命中并回退到归一化。"""
+        path = self._source_index_path(source_id)
+        try:
+            payload = json.loads(path.read_text())
+            if payload.get("sourceId") != source_id:
+                return None
+            ref = payload["ref"]
+            host = Path(self.image_host_path(ref))
+            if not host.is_file() or host.stat().st_size != ref["bytes"]:
+                return None
+            return ref
+        except (OSError, ValueError, KeyError, TypeError, AttachmentError):
+            return None
+
     def save_images_sync(self, inputs):
         if len(inputs) > self.limits.max_images_per_message:
             raise AttachmentError("Too many images in message", "TOO_MANY_IMAGES")
         if sum(len(i.data) for i in inputs) > self.limits.max_message_image_bytes:
             raise AttachmentError("Message images exceed byte limit", "IMAGES_TOO_LARGE")
+        refs = [None] * len(inputs)
+        pending = []
+        for index, source in enumerate(inputs):
+            hit = self._source_hit(digest(source.data))
+            if hit is None:
+                pending.append(index)
+                continue
+            refs[index] = {**hit, "name": safe_name(source.name)} if source.name else dict(hit)
         # Validate and normalize the complete batch before committing any object.
-        with measure("normalization"):
-            normalized = [normalize_image(i.data, i.media_type, self.limits, self.normalization_policy, self.normalization_max_dimension) for i in inputs]
-        refs, created = [], []
+        normalized = {}
+        if pending:
+            with measure("normalization"):
+                for index in pending:
+                    source = inputs[index]
+                    normalized[index] = normalize_image(
+                        source.data, source.media_type, self.limits,
+                        self.normalization_policy, self.normalization_max_dimension,
+                    )
+        created = []
         with attachment_lock(self.root.parent, "catalog"):
             quota = int(os.getenv("ATTACHMENT_STORE_MAX_BYTES", str(10 * 1024 ** 3)))
             occupied = self.occupied_bytes()
-            additions = {digest(item[0]): len(item[0]) for item in normalized if not (self._object_dir(digest(item[0])) / "image.json").exists()}
+            additions = {digest(item[0]): len(item[0]) for item in normalized.values() if not (self._object_dir(digest(item[0])) / "image.json").exists()}
             if occupied + sum(additions.values()) > quota:
                 raise AttachmentError("Attachment storage quota exceeded", "ATTACHMENT_QUOTA_EXCEEDED")
             try:
-                for source, (data, media_type, size, original) in zip(inputs, normalized):
+                for index, source in enumerate(inputs):
+                    if refs[index] is not None:
+                        continue
+                    data, media_type, size, original = normalized[index]
                     ref = {"attachmentId": digest(data), "mediaType": media_type, "bytes": len(data), "width": size[0], "height": size[1]}
                     if source.name:
                         ref["name"] = safe_name(source.name)
@@ -115,7 +157,15 @@ class LocalAttachmentStore:
                     if not metadata.exists():
                         created.append(metadata)
                         atomic_write(metadata, json.dumps({k: v for k, v in ref.items() if k not in {"name", "originalDimensions", "source"}}).encode(), readonly=True)
-                    refs.append(ref)
+                    refs[index] = ref
+                # 索引最后落盘：任何失败都会连同对象一起回滚，不留下悬挂映射。
+                for index in pending:
+                    source_id = digest(inputs[index].data)
+                    index_path = self._source_index_path(source_id)
+                    if index_path.exists():
+                        continue
+                    created.append(index_path)
+                    atomic_write(index_path, json.dumps({"sourceId": source_id, "ref": refs[index]}).encode(), readonly=True)
             except Exception as exc:
                 for path in reversed(created):
                     if path.exists():
@@ -209,4 +259,13 @@ class LocalAttachmentStore:
         path = Path(path)
         if path.parent.parent.parent == self.root and path.name.startswith("image."):
             return self.ref_by_id("sha256:" + path.parent.name)
+        if path.stat().st_size > self.limits.max_image_bytes:
+            raise AttachmentError("Image exceeds byte limit", "IMAGES_TOO_LARGE")
+        # 先按源字节判重：命中时连解码都省掉（重复读图从秒级降到几十毫秒）。
+        hit = self._source_hit(digest(path.read_bytes()))
+        if hit is not None:
+            ref = dict(hit)
+            if path.name:
+                ref["name"] = safe_name(path.name)
+            return ref
         return self.save_images_sync([self.prepare_path(path)])[0]
