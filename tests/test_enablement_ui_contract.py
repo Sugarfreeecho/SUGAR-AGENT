@@ -46,37 +46,26 @@ def test_model_profile_hover_detail_exposes_profile_id():
     assert "'model_porfile_id: ' + String(p.id" in switcher
 
 
-def test_pending_followup_mode_uses_custom_picker_instead_of_native_select():
+def test_pending_followup_queue_has_single_immediate_send_mode():
     frontend = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
 
-    assert "createFollowupModePicker" in frontend
-    assert "closeActiveFollowupModePicker" in frontend
-    assert "document.createElement('select')" not in frontend[frontend.index("function renderFollowupQueue"):frontend.index("function getFollowupStatusText")]
-    assert "立即插入当前运行" in frontend
-    assert "下一轮继续处理" in frontend
-    assert ".followup-mode-picker" in styles
-    assert ".followup-mode-menu" in styles
-    assert ".followup-mode-option.is-selected" in styles
-    assert "background: var(--floating-surface); box-shadow: var(--floating-shadow);" in styles
-    assert "--floating-surface: rgba(255, 255, 255, 0.99);" in styles
-    assert "position: fixed; z-index: 390" in styles
-    assert "document.body.appendChild(menu)" in frontend
-    assert "getBoundingClientRect()" in frontend
-    assert "var visualSelect = document.createElement('select');" in frontend
-    assert "visualSelect.className = 'followup-queue-mode';" in frontend
-    assert ".followup-mode-hit-target" in styles
-    assert ".followup-mode-direction" in styles
-    assert "rotate(225deg)" in styles
-    assert ".followup-mode-picker { position: relative; min-width: 3.7rem; height: 1.55rem; }" in styles
-    assert "height: 1.55rem;" in styles
-    assert "padding: 0 1.2rem 0 0.48rem;" in styles
-    assert "function followupQueueRenderSignature" in frontend
+    # 运行中追问不再提供“打断/追加”选择器：显式发送一律立即插话。
+    assert "createFollowupModePicker" not in frontend
+    assert "closeActiveFollowupModePicker" not in frontend
+    assert "function defaultSteerMode() {" in frontend
+    assert "return 'interrupt';" in frontend
     render_source = frontend[frontend.index("function renderFollowupQueue"):frontend.index("function getFollowupStatusText")]
-    assert render_source.index("panel.dataset.renderSignature === renderSignature") < render_source.index("closeActiveFollowupModePicker();")
+    assert "modePicker" not in render_source
+    assert "document.createElement('select')" not in render_source
+    assert "function followupQueueRenderSignature" in frontend
+    assert "panel.dataset.renderSignature === renderSignature" in render_source
     assert "followup-mode-trigger-mark" not in frontend
     assert "followup-mode-option-mark" not in frontend
-    assert "window.addEventListener('scroll', closeMenu, true)" not in frontend
+    # 旧菜单的浮动面板样式保留（主题契约仍覆盖），但不再被队列渲染使用。
+    assert ".followup-mode-picker" in styles
+    assert ".followup-mode-menu" in styles
+    assert "background: var(--floating-surface); box-shadow: var(--floating-shadow);" in styles
 
 
 def test_skill_picker_exposes_enablement_controls():

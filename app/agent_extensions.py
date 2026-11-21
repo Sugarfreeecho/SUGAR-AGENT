@@ -179,6 +179,47 @@ def load_plugins(
         return loaded
 
 
+_DISCOVERY_TTL_SECONDS = 10.0
+_discovery_lock = threading.Lock()
+_discovery_cache: Optional[Tuple[tuple[Any, ...], float, Tuple[Any, ...]]] = None
+
+
+def plugin_definitions(*, refresh: bool = False) -> Tuple[Any, ...]:
+    """Return every discovered plugin, enabled or not, from a short-lived cache.
+
+    Read-only lookups (the availability check and the bundled settings
+    fallback) must not rescan every plugin tree on each request: discovery
+    signs every file in asset-heavy trees. Enable/disable, install and
+    uninstall all call invalidate_extension_caches(), which bumps the catalog
+    generation and makes the next call rebuild immediately.
+    """
+
+    global _discovery_cache
+    manager = plugin_manager()
+    key = (
+        id(manager),
+        extension_catalog_generation(),
+        plugins_enabled(),
+        tuple(str(path) for path in manager.discovery_dirs),
+        str(manager.state.path),
+    )
+    if not refresh:
+        with _discovery_lock:
+            entry = _discovery_cache
+            if entry is not None and entry[0] == key and time.monotonic() - entry[1] <= _DISCOVERY_TTL_SECONDS:
+                return entry[2]
+    with _scan_lock:
+        if not refresh:
+            with _discovery_lock:
+                entry = _discovery_cache
+                if entry is not None and entry[0] == key and time.monotonic() - entry[1] <= _DISCOVERY_TTL_SECONDS:
+                    return entry[2]
+        plugins = tuple(manager.discover_report().plugins)
+        with _discovery_lock:
+            _discovery_cache = (key, time.monotonic(), plugins)
+        return plugins
+
+
 def _schedule_plugin_cache_refresh(
     manager: PluginManager,
     cache_key: tuple[Any, ...],
@@ -188,8 +229,10 @@ def _schedule_plugin_cache_refresh(
 
     Must be called with _lock held and a stale cache entry present. Workers
     with an explicit owner loop hand scheduling back to it. Sync callers with
-    no usable loop fall back to False so the caller rescans inline.
-    Only one background refresh is in flight at a time (process-wide).
+    no usable loop (the plugin HTTP gateway runs on a threadpool) refresh on a
+    daemon thread and keep serving the stale entry instead of blocking the
+    request on a full rescan. Only one background refresh is in flight at a
+    time (process-wide); the caller rescans inline only when no cache exists.
     """
 
     global _swr_refresh_in_flight
@@ -199,10 +242,8 @@ def _schedule_plugin_cache_refresh(
         current_loop = None
     if loop is None:
         loop = current_loop
-    if loop is None or loop.is_closed():
-        return False
     generation = _extension_catalog_generation
-    if current_loop is not loop:
+    if loop is not None and current_loop is not loop:
         def submit_on_owner_loop() -> None:
             with _lock:
                 # A settings/inventory invalidation may have superseded the
@@ -225,8 +266,8 @@ def _schedule_plugin_cache_refresh(
     _swr_refresh_in_flight = True
     _swr_work_begin()
 
-    def _refresh() -> None:
-        global _plugin_cache, _swr_refresh_in_flight
+    def _scan_and_publish() -> None:
+        global _plugin_cache
         try:
             with _scan_lock:
                 loaded = manager.load_enabled()
@@ -235,16 +276,31 @@ def _schedule_plugin_cache_refresh(
                     _plugin_cache = (time.monotonic(), cache_key, loaded)
         except Exception:
             logger.warning("Background plugin cache refresh failed", exc_info=True)
+
+    def _finish() -> None:
+        global _swr_refresh_in_flight
+        with _lock:
+            _swr_refresh_in_flight = False
+        _swr_work_end()
+
+    def _refresh() -> None:
+        try:
+            _scan_and_publish()
         finally:
-            with _lock:
-                _swr_refresh_in_flight = False
-            _swr_work_end()
+            _finish()
+
+    if loop is None or loop.is_closed():
+        threading.Thread(
+            target=_refresh,
+            name="plugin-cache-refresh",
+            daemon=True,
+        ).start()
+        return True
 
     try:
         task = loop.run_in_executor(None, _refresh)
     except BaseException:
-        _swr_refresh_in_flight = False
-        _swr_work_end()
+        _finish()
         raise
     # Keep a reference so the task is not garbage-collected mid-scan.
     _SWR_REFRESH_TASKS.add(task)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from pathlib import Path
 import time
 import uuid
@@ -13,6 +14,14 @@ from .runtime import BrowserManager
 from .page_context import normalize_context, with_page_reference
 
 _manager = None
+BRIDGE_TOKEN = os.environ.get("SUGAR_BROWSER_BRIDGE_TOKEN") or __import__("secrets").token_urlsafe(32)
+
+
+def bridge_endpoint() -> dict:
+    """给宿主内其它插件用的桥接信息（不落盘，只在本进程内可见）。"""
+    return {"path": "/api/browser/v1/bridge", "token": BRIDGE_TOKEN}
+
+
 CAPABILITIES = ["system.health", "session.list", "session.get", "session.history", "session.search", "session.attach", "session.detach",
     "session.config.get", "operation.get", "operation.wait", "session.create", "session.send", "session.steer", "session.interrupt",
     "session.update", "session.archive", "session.delete", "session.config.update", "approval.list", "approval.resolve",
@@ -172,6 +181,26 @@ def install(app, context, plugin):
         origin = request.headers.get("origin", "")
         if not _is_direct_loopback_request(request) or request.headers.get("sec-fetch-site") == "cross-site" or (origin and urlsplit(origin).netloc != request.url.netloc):
             raise HTTPException(403, "Setup is available only in the local app settings")
+
+    @router.post("/bridge")
+    async def bridge_call(request: Request):
+        """插件→浏览器桥：只接受回环请求 + 进程内令牌 + 四方法白名单。"""
+        import secrets as _secrets
+        from . import bridge
+
+        client = getattr(request, "client", None)
+        if client is not None and client.host not in {"127.0.0.1", "::1"}:
+            raise HTTPException(403, "bridge is loopback only")
+        token = request.headers.get("x-sugar-bridge", "")
+        if not _secrets.compare_digest(token, BRIDGE_TOKEN):
+            raise HTTPException(403, "bridge token invalid")
+        payload = await request.json()
+        try:
+            return await bridge.execute(str(payload.get("caller") or ""),
+                                        str(payload.get("method") or ""),
+                                        payload.get("params") or {})
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
 
     @router.get("/setup")
     async def setup_status(request: Request):
@@ -903,10 +932,29 @@ def install(app, context, plugin):
 
 async def start(context, plugin):
     global _manager
+    from . import bridge
+
+    bridge.set_loop(asyncio.get_running_loop())
+    try:
+        import plugin_bus
+
+        async def _browser_service(caller, method, params):
+            if caller != "sugar-assistant":
+                raise PermissionError(f"插件 {caller} 未获授权使用浏览器桥")
+            return await bridge.execute(caller, method, params)
+
+        plugin_bus.register("browser-use", "browser", _browser_service,
+                            methods={"open_chat", "send_text", "send_media", "read_recent",
+                                     "capture_send", "capture_begin", "capture_end"})
+    except Exception:
+        import logging
+
+        logging.getLogger("browser_use").exception("浏览器桥服务注册失败")
     from execution_services import execution_service
     from session_event_bus import add_event_listener
     service = execution_service(context["session_manager"])
     _manager = BrowserManager(service)
+    bridge.set_manager(_manager)
     _manager.control_service = control().service
     from session_control.public import register_source_lifecycle, source_state
     add_event_listener(_manager.on_event)

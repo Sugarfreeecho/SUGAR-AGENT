@@ -27,6 +27,7 @@ _BUNDLED_ROOT = Path(__file__).resolve().parents[2] / "plugins"
 _MODULES: dict[tuple[str, str], ModuleType] = {}
 _INSTALLED: set[tuple[int, str, str]] = set()
 _STARTED: list[tuple[PluginDefinition, ModuleType]] = []
+_INSTALLED_ROUTES: dict[tuple[int, str], list[Any]] = {}
 _LIFECYCLE_LOCK = asyncio.Lock()
 _AVAILABILITY_SNAPSHOT: ContextVar[dict | None] = ContextVar("bundled_host_availability_snapshot", default=None)
 
@@ -63,7 +64,8 @@ def is_bundled_trusted_host_plugin(plugin: PluginDefinition) -> bool:
 
 
 def _host_entry(plugin: PluginDefinition) -> Path | None:
-    capabilities = plugin.raw_manifest.get("capabilities")
+    manifest = getattr(plugin, "raw_manifest", None) or {}
+    capabilities = manifest.get("capabilities") if isinstance(manifest, dict) else None
     raw = capabilities.get("trusted_host") if isinstance(capabilities, Mapping) else None
     if not isinstance(raw, Mapping):
         return None
@@ -212,7 +214,13 @@ def install_bundled_host_extensions(
         install = getattr(module, "install", None) if module is not None else None
         key = (id(app), plugin.plugin_id, plugin.content_signature)
         if callable(install) and key not in _INSTALLED:
+            import plugin_bus
+
+            plugin_bus.note_plugin(plugin.plugin_id, plugin.permissions)
+            _drop_installed_routes(app, plugin.plugin_id)
+            before = len(app.routes)
             install(app, dict(context), plugin)
+            _INSTALLED_ROUTES[(id(app), plugin.plugin_id)] = list(app.routes[before:])
             _INSTALLED.add(key)
 
 
@@ -237,6 +245,9 @@ async def start_bundled_host_extensions(
             key = (plugin.plugin_id, plugin.content_signature)
             if key in started_keys:
                 continue
+            import plugin_bus
+
+            plugin_bus.note_plugin(plugin.plugin_id, plugin.permissions)
             value = module.start(dict(context), plugin)
             if inspect.isawaitable(value):
                 await value
@@ -258,6 +269,79 @@ async def _stop_bundled_host_extension(plugin, module, context) -> None:
         if inspect.isawaitable(value):
             await value
     _STARTED.remove((plugin, module))
+
+
+async def stop_bundled_host_extension(plugin_id: str, context: Mapping[str, Any]) -> None:
+    """Stop one plugin's host adapter even if its signature did not change."""
+
+    async with _LIFECYCLE_LOCK:
+        for plugin, module in reversed(list(_STARTED)):
+            if plugin.plugin_id == plugin_id:
+                await _stop_bundled_host_extension(plugin, module, context)
+
+
+def forget_bundled_host_extension(plugin_id: str) -> None:
+    """Drop cached adapter modules so the next start re-imports edited code."""
+
+    for key in [k for k in _MODULES if k[0] == plugin_id]:
+        module = _MODULES.pop(key, None)
+        name = getattr(module, "__name__", "")
+        if name:
+            sys.modules.pop(name, None)
+            for child in [n for n in sys.modules if n.startswith(name + ".")]:
+                sys.modules.pop(child, None)
+
+
+def forget_bundled_host_install(plugin_id: str) -> None:
+    """Allow install() to run again for one plugin after a forced reload."""
+
+    for key in [k for k in _INSTALLED if k[1] == plugin_id]:
+        _INSTALLED.discard(key)
+
+
+def _drop_installed_routes(app: Any, plugin_id: str) -> None:
+    """Remove routes a previous install() added, so re-install replaces instead of stacking."""
+
+    routes = _INSTALLED_ROUTES.pop((id(app), plugin_id), [])
+    if not routes:
+        return
+    try:
+        app.routes[:] = [route for route in app.routes if route not in routes]
+    except Exception:
+        for route in routes:
+            try:
+                app.routes.remove(route)
+            except ValueError:
+                pass
+
+
+async def restart_bundled_host_extension(plugin, context: Mapping[str, Any], app: Any = None) -> None:
+    """Force stop → re-import → install → start for one plugin, ignoring signatures."""
+
+    await stop_bundled_host_extension(plugin.plugin_id, context)
+    forget_bundled_host_extension(plugin.plugin_id)
+    forget_bundled_host_install(plugin.plugin_id)
+    module = _module(plugin)
+    if module is None:
+        return
+    install = getattr(module, "install", None)
+    if app is not None and callable(install):
+        import plugin_bus
+
+        plugin_bus.note_plugin(plugin.plugin_id, plugin.permissions)
+        _drop_installed_routes(app, plugin.plugin_id)
+        routes = getattr(app, "routes", None)
+        before = len(routes) if routes is not None else 0
+        install(app, dict(context), plugin)
+        if routes is not None:
+            _INSTALLED_ROUTES[(id(app), plugin.plugin_id)] = list(app.routes[before:])
+        _INSTALLED.add((id(app), plugin.plugin_id, plugin.content_signature))
+    start = getattr(module, "start", None)
+    if callable(start):
+        value = start(dict(context), plugin)
+        if inspect.isawaitable(value):
+            await value
+        _STARTED.append((plugin, module))
 
 
 async def stop_bundled_host_extensions(context: Mapping[str, Any]) -> None:

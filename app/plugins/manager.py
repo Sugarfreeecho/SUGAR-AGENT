@@ -176,6 +176,17 @@ class PluginManager:
 
         return self.discover_report().plugins
 
+    def loaded_signature(self, plugin_id: str) -> str:
+        """Return the content signature recorded by the last load.
+
+        ``discover()`` always reflects the current on-disk tree, so it cannot
+        answer "what did we run before this reload". Callers that report
+        changes use this recorded baseline instead.
+        """
+
+        with self._lock:
+            return self._loaded_signatures.get(normalize_namespace(plugin_id), "")
+
     def is_enabled(self, plugin_id: str) -> bool:
         namespace = normalize_namespace(plugin_id)
         override = tiers.env_override(namespace)

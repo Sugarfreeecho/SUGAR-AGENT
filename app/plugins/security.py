@@ -39,6 +39,11 @@ _SIGNATURE_IGNORED_DIRS = frozenset(
 _SIGNATURE_CACHE_LOCK = threading.Lock()
 _SIGNATURE_CACHE: "OrderedDict[str, tuple[str, str]]" = OrderedDict()
 _SIGNATURE_CACHE_LIMIT = 64
+# Reading every byte of an asset-heavy tree costs tens of seconds (the Remotion
+# tree alone is ~126 MB). Above this size the stat-only fingerprint is used as
+# the signature instead: it still detects changed names, sizes and mtimes, but
+# never blocks a catalog scan on megabytes of I/O.
+_SIGNATURE_MAX_DIGEST_BYTES = 32 * 1024 * 1024
 _SIGNATURE_CACHE_FILE = "plugin-signatures.json"
 _signature_cache_loaded = False
 
@@ -156,10 +161,15 @@ def iter_safe_plugin_files(root: Path) -> Iterator[Path]:
                 yield child
 
 
-def _plugin_tree_fingerprint(resolved_root: Path) -> str:
-    """Summarise file names, sizes and mtimes without reading plugin bytes."""
+def _plugin_tree_fingerprint(resolved_root: Path) -> "tuple[str, int]":
+    """Summarise file names, sizes and mtimes without reading plugin bytes.
+
+    Returns the fingerprint plus the total regular-file bytes it covers, so
+    callers can decide whether a full content digest is affordable.
+    """
 
     rows: list[tuple[str, str, int, int]] = []
+    total_bytes = 0
     pending = [resolved_root]
     while pending:
         current = pending.pop()
@@ -192,6 +202,7 @@ def _plugin_tree_fingerprint(resolved_root: Path) -> str:
                         raise PluginValidationError(
                             f"Cannot read plugin content: {path}"
                         ) from exc
+                    total_bytes += int(stat_result.st_size)
                     rows.append(
                         (relative, "F", int(stat_result.st_size),
                          int(stat_result.st_mtime_ns))
@@ -208,7 +219,7 @@ def _plugin_tree_fingerprint(resolved_root: Path) -> str:
         digest.update(b"\0")
         digest.update(size.to_bytes(8, "big", signed=False))
         digest.update(mtime_ns.to_bytes(8, "big", signed=False))
-    return digest.hexdigest()
+    return digest.hexdigest(), total_bytes
 
 
 def _read_plugin_content_digest(resolved_root: Path) -> str:
@@ -325,14 +336,17 @@ def plugin_content_signature(root: Path) -> str:
     except (OSError, RuntimeError) as exc:
         raise PluginValidationError(f"Plugin root does not exist: {root}") from exc
     cache_key = os.path.normcase(str(resolved_root))
-    fingerprint = _plugin_tree_fingerprint(resolved_root)
+    fingerprint, content_bytes = _plugin_tree_fingerprint(resolved_root)
     with _SIGNATURE_CACHE_LOCK:
         _load_signature_cache()
         cached = _SIGNATURE_CACHE.get(cache_key)
         if cached is not None and cached[0] == fingerprint:
             _SIGNATURE_CACHE.move_to_end(cache_key)
             return cached[1]
-    signature = _read_plugin_content_digest(resolved_root)
+    if content_bytes > _SIGNATURE_MAX_DIGEST_BYTES:
+        signature = "stat:" + fingerprint
+    else:
+        signature = _read_plugin_content_digest(resolved_root)
     with _SIGNATURE_CACHE_LOCK:
         _SIGNATURE_CACHE[cache_key] = (fingerprint, signature)
         _SIGNATURE_CACHE.move_to_end(cache_key)

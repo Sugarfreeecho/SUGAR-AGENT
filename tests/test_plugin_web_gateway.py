@@ -1,5 +1,6 @@
 import json
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -279,3 +280,104 @@ def test_plugin_http_consumes_session_grant_only_for_run_many_actions(
     assert captured["owner"] == "web.demo"
     assert captured["token"] == "grant-token"
     assert set(captured["trusted"]) == {"s1", "s2"}
+
+
+def test_plugin_http_reuses_one_cached_catalog_load_per_request(tmp_path, monkeypatch):
+    """Resolving the plugin must not force a second full tree scan per request."""
+
+    import plugin_web_gateway as gateway
+
+    _configure(tmp_path, monkeypatch)
+    plugin = gateway._enabled_plugin("web.demo")
+    calls = []
+    handed_to_worker = {}
+
+    def cached_load(**options):
+        calls.append(options.get("force", False))
+        return SimpleNamespace(plugins=(plugin,))
+
+    monkeypatch.setattr(gateway, "load_plugins", cached_load)
+    monkeypatch.setattr(
+        gateway.get_plugin_runtime_registry(),
+        "handle_http",
+        lambda plugin_id, request, plugins: handed_to_worker.update(
+            {"plugins": plugins}
+        ) or {"status": 200, "json": {"ok": True}},
+    )
+
+    response = gateway.invoke_plugin_http(
+        "web.demo", method="GET", path="/", query={}, headers={}, body=b""
+    )
+
+    assert response.status == 200
+    assert calls == [False], "the gateway must read the warm catalog, not force a rescan"
+    assert handed_to_worker["plugins"] == (plugin,)
+
+
+def test_plugin_http_still_rejects_a_disabled_plugin(tmp_path, monkeypatch):
+    import agent_extensions
+    import plugin_web_gateway as gateway
+
+    _configure(tmp_path, monkeypatch)
+    plugin = gateway._enabled_plugin("web.demo")
+    monkeypatch.setattr(gateway, "load_plugins", lambda **_: SimpleNamespace(plugins=(plugin,)))
+    monkeypatch.setattr(
+        agent_extensions, "plugin_manager", lambda: SimpleNamespace(is_enabled=lambda _: False)
+    )
+    monkeypatch.setattr(
+        gateway.get_plugin_runtime_registry(),
+        "handle_http",
+        lambda *_args, **_kwargs: pytest.fail("disabled plugins must not reach the worker"),
+    )
+
+    with pytest.raises(gateway.PluginWebError) as error:
+        gateway.invoke_plugin_http(
+            "web.demo", method="GET", path="/", query={}, headers={}, body=b""
+        )
+
+    assert error.value.status == 404
+
+
+def test_plugin_definitions_reuse_discovery_within_ttl(monkeypatch):
+    import agent_extensions
+
+    scans = []
+    manager = SimpleNamespace(
+        discovery_dirs=(),
+        state=SimpleNamespace(path=Path("plugin-state.json")),
+        discover_report=lambda: scans.append(1) or SimpleNamespace(plugins=("demo",)),
+    )
+    monkeypatch.setattr(agent_extensions, "plugin_manager", lambda: manager)
+    monkeypatch.setattr(agent_extensions, "_discovery_cache", None)
+
+    first = agent_extensions.plugin_definitions()
+    second = agent_extensions.plugin_definitions()
+    refreshed = agent_extensions.plugin_definitions(refresh=True)
+
+    assert first == second == refreshed == ("demo",)
+    assert len(scans) == 2, "the second read is cached; an explicit refresh rescans"
+
+
+def test_oversized_plugin_tree_keeps_the_stat_signature(tmp_path, monkeypatch):
+    """Asset-heavy trees must not be re-read byte by byte on every reload."""
+
+    from plugins import security
+    from collections import OrderedDict
+
+    root = tmp_path / "asset-heavy"
+    root.mkdir()
+    (root / "payload.bin").write_bytes(b"x" * 64)
+    monkeypatch.setattr(security, "_SIGNATURE_MAX_DIGEST_BYTES", 8)
+    monkeypatch.setattr(security, "_SIGNATURE_CACHE", OrderedDict())
+    monkeypatch.setattr(security, "_signature_cache_loaded", True)
+    monkeypatch.setattr(security, "_signature_cache_path", lambda: None)
+    monkeypatch.setattr(
+        security,
+        "_read_plugin_content_digest",
+        lambda _root: pytest.fail("oversized trees must not be read in full"),
+    )
+
+    signature = security.plugin_content_signature(root)
+
+    assert signature.startswith("stat:")
+    assert security.plugin_content_signature(root) == signature

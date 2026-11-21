@@ -279,6 +279,13 @@ def register_builtin_host_tools() -> None:
             policy=ToolExecutionPolicy(effect="control", interactive=True,
                                        early_stream_safe=False, interruptibility="cooperative"),
         )
+    if not host_tool_invokers.has("reload_plugin"):
+        from plugin_hot_reload import invoke_reload_plugin
+        host_tool_invokers.register(
+            "reload_plugin", invoke_reload_plugin,
+            policy=ToolExecutionPolicy(effect="control", early_stream_safe=False,
+                                       interruptibility="non_interruptible"),
+        )
     for name in ("tool_search", "tool_describe", "tool_call"):
         if not host_tool_invokers.has(name):
             host_tool_invokers.register(

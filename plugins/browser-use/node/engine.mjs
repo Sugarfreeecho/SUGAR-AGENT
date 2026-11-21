@@ -33,6 +33,17 @@ function transportPair() {
   return [a, b];
 }
 
+function sampleFrame(payload) {
+  const buffer = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload), 'utf8');
+  const printable = buffer.length > 0 && buffer.subarray(0, 64).every(b => b === 9 || b === 10 || b === 13 || (b >= 32 && b < 127));
+  return {
+    length: buffer.length,
+    binary: !printable,
+    base64: buffer.subarray(0, 400).toString('base64'),
+    text: printable ? buffer.subarray(0, 400).toString('utf8') : '',
+  };
+}
+
 export class BrowserEngine {
   constructor(relay, { contextGetter, outputDir } = {}) {
     this.relay = relay;
@@ -56,6 +67,47 @@ export class BrowserEngine {
       this.browserGeneration = this.relay.generation;
     }
     return this.browser.contexts()[0];
+  }
+  async captureStart(runId) {
+    const context = await this.context();
+    const records = [];
+    const handler = request => {
+      if (request.method() !== 'POST') return;
+      const url = request.url();
+      if (!/feishu\.cn/.test(url)) return;
+      let b64 = '';
+      try {
+        const buffer = request.postDataBuffer();
+        if (buffer) b64 = buffer.toString('base64').slice(0, 8000);
+      } catch { /* 非二进制请求忽略 */ }
+      records.push({
+        url,
+        headers: request.headers(),
+        postData: (request.postData() || '').slice(0, 4000),
+        b64,
+      });
+    };
+    context.on('request', handler);
+    const frames = [];
+    const attach = page => {
+      page.on('websocket', socket => {
+        const url = socket.url();
+        socket.on('framesent', payload => frames.push({ url, dir: 'sent', sample: sampleFrame(payload) }));
+        socket.on('framereceived', payload => frames.push({ url, dir: 'recv', sample: sampleFrame(payload) }));
+      });
+    };
+    context.pages().forEach(attach);
+    context.on('page', attach);
+    this.captures = this.captures || new Map();
+    this.captures.set(runId, { context, handler, records, frames });
+    return { ok: true };
+  }
+  async captureStop(runId) {
+    const entry = (this.captures || new Map()).get(runId);
+    if (!entry) return [];
+    entry.context.off('request', entry.handler);
+    this.captures.delete(runId);
+    return { requests: entry.records, frames: entry.frames };
   }
   async getClient(sessionId, workspace = process.cwd()) {
     const key = `${this.relay.generation}:${sessionId}`;

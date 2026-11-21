@@ -72,20 +72,25 @@ def validate_plugin_write_origin(
         raise PluginWebError(403, "cross_origin_denied", "Cross-origin plugin write denied")
 
 
-def _enabled_plugin(plugin_id: str, *, refresh: bool = True) -> PluginDefinition:
+def _plugin_from_loaded(loaded: Any, plugin_id: str, *, verify_enablement: bool) -> PluginDefinition:
     namespace = normalize_namespace(plugin_id)
-    loaded = load_plugins(force=refresh)
     plugin = next(
         (item for item in loaded.plugins if item.plugin_id == namespace),
         None,
     )
     if plugin is None:
         raise PluginWebError(404, "plugin_not_found", "Plugin is not enabled")
-    if not refresh:
+    if verify_enablement:
         from agent_extensions import plugin_manager
         if not plugin_manager().is_enabled(namespace):
             raise PluginWebError(404, "plugin_not_found", "Plugin is not enabled")
     return plugin
+
+
+def _enabled_plugin(plugin_id: str, *, refresh: bool = True) -> PluginDefinition:
+    return _plugin_from_loaded(
+        load_plugins(force=refresh), plugin_id, verify_enablement=not refresh
+    )
 
 
 def plugin_page(plugin_id: str) -> Path:
@@ -211,7 +216,10 @@ def invoke_plugin_http(
         raise PluginWebError(405, "method_not_allowed", "Plugin HTTP method is not allowed")
     if len(body) > MAX_PLUGIN_REQUEST_BODY:
         raise PluginWebError(413, "request_too_large", "Plugin request body is too large")
-    plugin = _enabled_plugin(plugin_id)
+    # One cached catalog load per request: resolving the plugin and handing its
+    # manifest list to the worker must not sign every plugin tree twice.
+    loaded = load_plugins()
+    plugin = _plugin_from_loaded(loaded, plugin_id, verify_enablement=True)
     request = {
         "method": verb,
         "path": _clean_path(path),
@@ -237,7 +245,7 @@ def invoke_plugin_http(
             value = get_plugin_runtime_registry().handle_http(
                 plugin.plugin_id,
                 request,
-                load_plugins(force=True).plugins,
+                loaded.plugins,
             )
         except PluginRuntimeError as exc:
             raise PluginWebError(502, "plugin_runtime_error", str(exc)) from exc
