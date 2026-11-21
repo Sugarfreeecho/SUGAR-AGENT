@@ -8546,12 +8546,19 @@ class SessionManager:
         self._notify_session_state_changed(session_id, {"todo"})
 
     def set_session_goal_review_pending(self, session_id: str, pending: bool) -> None:
+        self._set_session_flag(session_id, "goal_review_pending", pending)
+
+    def set_session_shared(self, session_id: str, shared: bool) -> None:
+        """IM 群聊共享标记：允许多个发送者进入同一会话（仍各自带身份）。"""
+        self._set_session_flag(session_id, "shared", shared)
+
+    def _set_session_flag(self, session_id: str, key: str, value: bool) -> None:
         sid = str(session_id or "").strip()
         if not sid:
             return
-        pending = bool(pending)
+        pending = bool(value)
         target = next((sess for sess in self.index if sess.get("id") == sid), None)
-        if target is not None and bool(target.get("goal_review_pending", False)) == pending:
+        if target is not None and bool(target.get(key, False)) == pending:
             return
         meta_path = self._get_metadata_path(sid)
         if not meta_path.exists():
@@ -8561,19 +8568,19 @@ class SessionManager:
             metadata = self._load_metadata_unlocked(sid)
             if not isinstance(metadata, dict):
                 metadata = {}
-            metadata["goal_review_pending"] = pending
+            metadata[key] = pending
             metadata["updated_at"] = datetime.now().isoformat()
             self._save_metadata_unlocked(sid, metadata)
         for sess in self.index:
             if sess.get("id") == sid:
-                sess["goal_review_pending"] = pending
+                sess[key] = pending
                 sess["updated_at"] = metadata["updated_at"]
                 break
         else:
             self.refresh_sessions_index_from_disk()
             return
         self._save_index()
-        self._notify_session_state_changed(sid, {"goal_review_pending"})
+        self._notify_session_state_changed(sid, {key})
 
     def set_session_work_dir(self, session_id: str, work_dir: str, *, expected_root: str | None = None) -> dict:
         """Change one session's root without moving shared storage or process cwd.

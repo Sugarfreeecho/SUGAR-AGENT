@@ -415,6 +415,14 @@ class ExecutionJournal:
                 for row in list(state["records"].values()):
                     if row.get("run_id") == run and row.get("status") not in TERMINAL:
                         if str(row.get("tool_call_id") or "") in preserved:
+                            # The call left the foreground run but is still
+                            # executing; keep a dedicated non-terminal status so
+                            # the UI says "已转入后台" instead of "已中断".
+                            self._append(session_id, state, {
+                                "execution_id": row["execution_id"],
+                                "status": "background",
+                                "reason": event.get("reason") or kind,
+                            }, run)
                             continue
                         if event.get("reason") in {"output_length", "truncated_after_closed_tool_call", "transport_after_closed_tool_call"} and row.get("status") != "generating":
                             continue
@@ -615,8 +623,8 @@ def interrupted_tool_text(record: dict | None, *, reason="user_steer", backgroun
         # The call was not cancelled: it keeps running outside the foreground
         # run and reports its real result as a separate background record.
         lines = [
-            "工具调用已转入后台继续执行（用户追问优先开启新一轮）。",
-            "这不是失败：工具仍在运行，完成后结果会作为后台工具记录补发。",
+            "工具已转入后台继续执行：用户追问优先开启了新一轮，本次调用未被取消。",
+            "结果会在完成后补发；补发前不要重复执行同一操作。",
         ]
         if executed:
             lines.append("工具已确认开始执行。")

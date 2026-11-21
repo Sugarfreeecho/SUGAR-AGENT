@@ -158,7 +158,7 @@ def test_abort_preserves_background_tool_status(tmp_path):
     emit("tool_execution_state", tool_call_id="bg", tool_call_index=0,
          status="running", executed=True)
     emit("llm_stream_aborted", reason="user_steer", preserve_tool_call_ids=["bg"])
-    assert record_for("bg")["status"] == "running"
+    assert record_for("bg")["status"] == "background"
 
     emit("tool_pending", tool_call_id="fg", tool_call_index=1, tool="web_fetch", args={})
     emit("tool_execution_state", tool_call_id="fg", tool_call_index=1,

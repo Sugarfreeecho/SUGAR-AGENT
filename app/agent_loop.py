@@ -118,6 +118,7 @@ from tool_registry import (
 from host_tool_registry import HostToolInvocationContext, host_tool_invokers
 from tool_result_status import _tool_result_status, legacy_tool_outcome, tool_outcome_status
 import tool_search
+import tool_cancel
 from stream_event_bridge import StreamEventBridge
 from tool_execution_policy import (
     ToolExecutionPolicy,
@@ -238,7 +239,10 @@ STREAM_WORKER_ABORT_TIMEOUT_SEC = max(
     0.1, float(os.getenv("STREAM_WORKER_ABORT_TIMEOUT_SEC", "5"))
 )
 STREAM_WORKER_IDLE_TIMEOUT_SEC = max(
-    1.0, float(os.getenv("STREAM_WORKER_IDLE_TIMEOUT_SEC", "60"))
+    1.0, float(os.getenv("STREAM_WORKER_IDLE_TIMEOUT_SEC", "180"))
+)
+READ_TOOL_TIMEOUT_SEC = max(
+    1.0, float(os.getenv("READ_TOOL_TIMEOUT_SEC", "300"))
 )
 TODO_UPDATE_REMINDER_START_ROUNDS = max(
     0, int(os.getenv("TODO_UPDATE_REMINDER_START_ROUNDS", "20"))
@@ -834,6 +838,53 @@ def _tool_execution_error_result(
         "tool_failed": True,
         "tool_status": _tool_result_status(tool_name, message, failed=True),
     }
+
+
+def _tool_timeout_result(
+    tool_call: Dict[str, Any],
+    timeout_sec: float,
+) -> Dict[str, Any]:
+    """Return a protocol-level timeout result for a read-only tool."""
+    tool_name = str(tool_call.get("name") or "")
+    message = (
+        f"Error: {tool_name} timed out after {timeout_sec:g}s "
+        "(READ_TOOL_TIMEOUT_SEC); results incomplete."
+    )
+    logger.error(message)
+    return {
+        "type": "tool",
+        "tool_name": tool_name,
+        "tool_args": tool_call.get("args") or {},
+        "tool_id": str(tool_call.get("id") or ""),
+        "tool_call_index": tool_call.get("index"),
+        "result": message,
+        "tool_detail_log": message,
+        "tool_detail_llm": message,
+        "tool_detail_ui": message,
+        "result_for_log": message,
+        "tool_failed": True,
+        "tool_status": _tool_result_status(tool_name, message, failed=True),
+    }
+
+
+async def _await_read_tool(tool_call: Dict[str, Any], awaitable):
+    """Run a read-only tool with a deadline and cooperative cancel signal."""
+    cancel_event = threading.Event()
+    token = tool_cancel.set_cancel_event(cancel_event)
+    try:
+        return await asyncio.wait_for(awaitable, timeout=READ_TOOL_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        # The worker thread cannot be killed; tell it to stop at its next
+        # checkpoint so it does not keep a core busy after we return.
+        cancel_event.set()
+        logger.warning(
+            "read-only tool %s exceeded %ss; returning timeout result",
+            tool_call.get("name"),
+            READ_TOOL_TIMEOUT_SEC,
+        )
+        return _tool_timeout_result(tool_call, READ_TOOL_TIMEOUT_SEC)
+    finally:
+        tool_cancel.reset_cancel_event(token)
 
 
 def _unknown_tool_result(
@@ -10080,6 +10131,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         call: Dict[str, Any],
                         defer_steer: bool = False,
                         catch_errors: bool = False,
+                        cancel_on_parent: bool = False,
                     ) -> Any:
                         early_task = _early_task_for(call)
                         try:
@@ -10090,6 +10142,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 return await _await_steerable(
                                     state, early_task, emit, "tool",
                                     cancel_on_steer=not _background_eligible(call),
+                                    cancel_on_parent=cancel_on_parent,
                                 )
                             scope = _background_scope_for(call)
                             return await _await_steerable(
@@ -10099,6 +10152,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 "tool",
                                 defer_steer=defer_steer,
                                 background=scope,
+                                cancel_on_parent=cancel_on_parent,
                             )
                         except (_SteerRestartRequested, asyncio.CancelledError):
                             raise
@@ -10115,13 +10169,24 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         if gate is not None:
                             await gate.wait()
                         descriptor = tool_search.call_descriptor(tool_registry, call)
+
+                        async def run_guarded() -> Any:
+                            return await _await_read_tool(
+                                call,
+                                run_single(
+                                    call,
+                                    catch_errors=True,
+                                    cancel_on_parent=True,
+                                ),
+                            )
+
                         async with read_semaphore:
                             if bool(getattr(descriptor, "pressure_limited", False)):
                                 async with pressure_semaphore:
                                     read_started.add(position)
-                                    return position, await run_single(call, catch_errors=True)
+                                    return position, await run_guarded()
                             read_started.add(position)
-                            return position, await run_single(call, catch_errors=True)
+                            return position, await run_guarded()
 
                     async def run_serial(call: Dict[str, Any]) -> Any:
                         # Serialized writes keep their real result when a steer
@@ -11585,10 +11650,15 @@ async def astream_events(
     _pre_api_timing_mark(pre_run_timings, "decode_histories", _t_pre)
     from attachments.admission import AdmissionContext, admit_content
     from attachments import get_attachment_store
-    user_message = UserMessage(content=admit_content(
+    # 内联图片/路径图片的准入要解码并归一化（12MP 约 1.6s），必须离开事件循环。
+    admitted_content = await asyncio.to_thread(
+        admit_content,
         user_content if isinstance(user_content, list) else user_input,
-        AdmissionContext(get_attachment_store(WORK_DIR)), scan_paths=True, scan_remote=True,
-    ))
+        AdmissionContext(get_attachment_store(WORK_DIR)),
+        scan_paths=True,
+        scan_remote=True,
+    )
+    user_message = UserMessage(content=admitted_content)
     context_token_mode = get_context_token_mode(context_token_mode)
 
     new_work_messages = prev_work_messages + [user_message]

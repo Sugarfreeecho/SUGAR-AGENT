@@ -3994,19 +3994,43 @@ def glob(
 
         max_m = _glob_max_matches()
         indexed_matches = _glob_with_windows_index(root_path, use_pattern, max_m)
+        stopped_reason = ""
+        capped = False
         if indexed_matches is not None:
             raw_matches = indexed_matches
         else:
-            from tool_glob import recursive_glob
+            from tool_cancel import current_cancel_event
+            from tool_glob import GlobScanStopped, recursive_glob
 
-            candidates = recursive_glob(root_path, use_pattern)
+            candidates = recursive_glob(
+                root_path, use_pattern, cancel_event=current_cancel_event()
+            )
             if candidates is None:
                 candidates = root_path.glob(use_pattern)
-            raw_matches = [m for m in candidates if not _path_is_sensitive_tool_resource(m)]
+            raw_matches = []
+            try:
+                for candidate in candidates:
+                    if _path_is_sensitive_tool_resource(candidate):
+                        continue
+                    raw_matches.append(candidate)
+                    # Stop as soon as the answer is complete enough.  Walking
+                    # the whole tree just to count the truncation is what made
+                    # glob unusable on large monorepos.
+                    if len(raw_matches) > max_m:
+                        capped = True
+                        raw_matches.pop()
+                        break
+            except GlobScanStopped as stopped:
+                stopped_reason = stopped.reason
         raw_matches = [m for m in raw_matches if "tempoutput" not in {part.lower() for part in m.relative_to(root_path).parts}]
         truncated_ct = max(0, len(raw_matches) - max_m)
         matches = raw_matches[:max_m]
         if not matches:
+            if stopped_reason:
+                return (
+                    f"No matching files found (scan stopped early: {stopped_reason}; "
+                    "results incomplete)"
+                )
             hint = ""
             if ":" in use_pattern and raw_root == "/":
                 hint = " (Hint: pattern seems to contain a drive path; put directory in path/root, pattern as relative glob only)"
@@ -4016,7 +4040,13 @@ def glob(
         for m in matches:
             result.append(_format_path_for_tool_output(m))
         out = redact_sensitive_tool_text("\n".join(result) if result else "No matching files found")
-        if truncated_ct:
+        if stopped_reason:
+            out += (
+                f"\n... (glob scan stopped early: {stopped_reason}; results incomplete)"
+            )
+        elif capped:
+            out += f"\n... (more paths omitted; GLOB_MAX_MATCHES={max_m})"
+        elif truncated_ct:
             out += f"\n... ({truncated_ct} more paths omitted; GLOB_MAX_MATCHES={max_m})"
         return out
 
@@ -4635,6 +4665,17 @@ OPENAI_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
          "change_summary": {"type": "string", "description": "Changes and validation already completed."},
          "resume_hint": {"type": "string", "description": "What to verify or continue after restart."}},
         ["reason"],
+    ),
+    _openai_function_schema(
+        "reload_plugin",
+        "Hot-reload one installed plugin without restarting the backend: re-reads its manifest, skills, hooks "
+        "and MCP declarations, replaces its isolated runtime workers, reinstalls bundled host routes and "
+        "lifecycle callbacks, and republishes MCP connections when it declares any. Other plugins keep their "
+        "live workers. Use it after editing a plugin's files; it does not install dependencies, does not "
+        "enable a disabled plugin, and in-flight calls to that plugin may fail while its worker is replaced.",
+        {"plugin_id": {"type": "string", "description": "Plugin namespace to reload, e.g. sugar-assistant."},
+         "reason": {"type": "string", "description": "Optional short note on what changed."}},
+        ["plugin_id"],
     ),
     _openai_function_schema(
         "show_user",
