@@ -81,6 +81,7 @@ from agent_tools import discover_skills, set_skill_enabled
 import model_profiles
 import execution_metrics
 import usage_stats
+import workspace_doc_preview as doc_preview
 from path_picker_util import pick_native_path
 from config_paths import resolve_legacy_config_path
 
@@ -1029,6 +1030,22 @@ def _react_run_fence_owner(sid: str):
     return inspect_run_fence(path)
 
 
+def run_has_live_owner(session_id: str, run_id: str = "") -> bool:
+    """True when a process still owns this run's fence.
+
+    Liveness must not be judged from this process alone: after a restart the
+    previous instance may still be executing a tool. ``unknown`` (an
+    unverifiable fence) fails closed so a possibly live writer is never marked
+    stale by someone else.
+    """
+    owner = _react_run_fence_owner(session_id)
+    if owner.status not in {"live", "unknown"}:
+        return False
+    if not run_id or not getattr(owner, "run_id", ""):
+        return True
+    return str(owner.run_id) == str(run_id)
+
+
 def _session_is_archived(sid: str) -> bool:
     reader = getattr(session_manager, "get_session_summary", None)
     if not callable(reader):
@@ -1056,13 +1073,29 @@ def _evaluate_react_recovery(sid: str) -> bool:
         not sid
         or _has_local_worker_activity(sid)
         or int(_active_chat_by_session.get(sid, 0) or 0) > 0
-        or session_workflows.continuation_source(sid)
     ):
         return False
     owner = _react_run_fence_owner(sid)
     if owner.status in {"live", "unknown"}:
         return False
     if _session_is_archived(sid):
+        return False
+    # A dead owner leaves a durable run that never reaches a terminal state.
+    # Every consumer sees that ghost: the scheduler treats the session as busy,
+    # new input queues behind it, and the UI keeps showing a running turn. Close
+    # it before asking who owns the resume decision -- a workflow scheduler may
+    # own continuation without owning the crash reconciliation.
+    snapshot: dict = {}
+    reconciled = 0
+    if owner.status == "dead":
+        snapshot = _runtime_v2_snapshot(sid)
+        reconciled = _cleanup_orphan_runtime_v2_active_runs(
+            sid,
+            reason="no_local_activity",
+            respect_grace=False,
+            snapshot=snapshot,
+        )
+    if session_workflows.continuation_source(sid):
         return False
     # A complete visible turn has nothing to resume. Check the indexed UI
     # boundary before loading the full model/execution snapshot: startup used
@@ -1072,7 +1105,8 @@ def _evaluate_react_recovery(sid: str) -> bool:
     can_continue = getattr(session_manager, "can_continue_react_session", None)
     if callable(can_continue) and not can_continue(sid):
         return False
-    snapshot = _runtime_v2_snapshot(sid)
+    if not snapshot:
+        snapshot = _runtime_v2_snapshot(sid)
     # A verified dead owner needs no 30-second heartbeat grace. Legacy fences
     # retain the old grace behavior; unverifiable new fences fail closed above.
     if owner.status != "dead" and (
@@ -1082,12 +1116,14 @@ def _evaluate_react_recovery(sid: str) -> bool:
         return False
     if _session_pending_human_count(sid) != 0:
         return False
-    cleaned = _cleanup_orphan_runtime_v2_active_runs(
-        sid,
-        reason="no_local_activity",
-        respect_grace=owner.status != "dead",
-        snapshot=snapshot,
-    )
+    cleaned = reconciled
+    if owner.status != "dead":
+        cleaned = _cleanup_orphan_runtime_v2_active_runs(
+            sid,
+            reason="no_local_activity",
+            respect_grace=True,
+            snapshot=snapshot,
+        )
     if cleaned:
         # Cleanup just committed the durable interruption this run resumes from.
         # Auto-resume would still veto an explicit user stop, so apply the same
@@ -1361,6 +1397,68 @@ async def recover_orphaned_sessions(session_ids) -> list[str]:
             len(seen), len(scheduled),
         )
     return scheduled
+
+
+async def reconcile_orphaned_control_operations() -> int:
+    """Close control operations whose worker died with a previous process.
+
+    A ``running`` row is only ever produced by an in-process worker. After a
+    restart that worker is gone, yet the row still counts as in flight, so a
+    coalesced workflow retry attaches to it and never starts -- the session
+    looks permanently "queued". Only rows whose run fence proves no live owner
+    are closed, and only after the orphan grace window so a second instance
+    that is just starting a run is never cut off.
+    """
+    try:
+        from session_control.public import control_application
+
+        store = control_application().service.store
+    except Exception:
+        return 0
+    try:
+        rows = await asyncio.to_thread(store.operations, status="running", limit=1000)
+    except Exception:
+        logger.warning("Control operation reconciliation could not list rows", exc_info=True)
+        return 0
+    reconciled = 0
+    for op in rows or ():
+        sid = str((op or {}).get("session_id") or "").strip()
+        run_id = str((op or {}).get("run_id") or "").strip()
+        if not sid or _has_local_run_activity(sid) or _has_running_subagent_activity(sid):
+            continue
+        age = time.time() - float((op or {}).get("updated") or 0.0)
+        if age < _RUNTIME_V2_ORPHAN_GRACE_SEC:
+            continue
+        owner = _react_run_fence_owner(sid)
+        if owner.status in {"live", "unknown"}:
+            continue
+        if owner.status == "dead" and owner.run_id and run_id and owner.run_id != run_id:
+            continue  # The fence names a different run; leave this row alone.
+        try:
+            changed = await asyncio.to_thread(
+                store.update_operation,
+                op["id"],
+                expected="running",
+                status="interrupted",
+                error={
+                    "code": "orphaned_operation",
+                    "message": "Previous process stopped before this operation finished",
+                },
+            )
+        except Exception:
+            logger.debug(
+                "Control operation reconciliation failed for %s", op.get("id"), exc_info=True
+            )
+            continue
+        if changed:
+            reconciled += 1
+            logger.info(
+                "Reconciled orphaned control operation: session=%s run=%s method=%s",
+                sid, run_id, op.get("method"),
+            )
+    if reconciled:
+        logger.info("Control operation reconciliation completed: interrupted=%d", reconciled)
+    return reconciled
 
 
 async def _run_startup_recovery_passes() -> None:
@@ -2879,6 +2977,92 @@ async def workspace_file_text(
     )
 
 
+@fastapi_app.get("/api/workspace-doc-preview")
+async def workspace_doc_preview(
+    rel: str = Query("", description="工作区相对路径、虚拟 /path 或本机绝对路径"),
+    session_id: str = "",
+    work_dir: str = "",
+):
+    """Parse one Word / PowerPoint / Excel file for the details column.
+
+    Read-only: the document is opened for reading, parsed in a worker thread
+    and returned as escaped HTML plus layout data. Paths go through the same
+    gate as the text and media endpoints.
+    """
+    root = await run_in_threadpool(_workspace_request_root, session_id, work_dir)
+    try:
+        path = await run_in_threadpool(_resolve_workspace_view_path, rel, root)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "path is empty"}, status_code=400)
+    except PermissionError:
+        return JSONResponse({"ok": False, "error": "path outside allowed roots"}, status_code=403)
+    except FileNotFoundError:
+        return JSONResponse({"ok": False, "error": "file not found"}, status_code=404)
+    except Exception as exc:
+        logger.warning("workspace preview resolve failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "invalid file path"}, status_code=400)
+    if not doc_preview.preview_kind(path):
+        return JSONResponse({"ok": False, "error": "unsupported file type"}, status_code=415)
+    try:
+        payload = await asyncio.wait_for(
+            run_in_threadpool(doc_preview.build_preview, path),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        return JSONResponse({"ok": False, "error": "preview timed out"}, status_code=504)
+    except doc_preview.PreviewError as exc:
+        return JSONResponse({"ok": False, "error": exc.message}, status_code=exc.status_code)
+    except Exception as exc:
+        logger.warning("workspace preview failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "preview failed"}, status_code=500)
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
+@fastapi_app.get("/api/workspace-doc-media")
+async def workspace_doc_media(
+    rel: str = Query("", description="文档路径，与 /api/workspace-doc-preview 相同"),
+    part: str = Query("", description="包内部件名，如 ppt/media/image1.png"),
+    session_id: str = "",
+    work_dir: str = "",
+):
+    """Serve one embedded image of a previewed document.
+
+    Only image parts under the office media folders are readable, so the
+    endpoint cannot be used to pull arbitrary package entries.
+    """
+    root = await run_in_threadpool(_workspace_request_root, session_id, work_dir)
+    try:
+        path = await run_in_threadpool(_resolve_workspace_view_path, rel, root)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "path is empty"}, status_code=400)
+    except PermissionError:
+        return JSONResponse({"ok": False, "error": "path outside allowed roots"}, status_code=403)
+    except FileNotFoundError:
+        return JSONResponse({"ok": False, "error": "file not found"}, status_code=404)
+    except Exception as exc:
+        logger.warning("workspace preview media resolve failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "invalid file path"}, status_code=400)
+    if not doc_preview.preview_kind(path):
+        return JSONResponse({"ok": False, "error": "unsupported file type"}, status_code=415)
+    try:
+        data, media_type = await run_in_threadpool(
+            doc_preview.read_preview_media, path, part)
+    except doc_preview.PreviewError as exc:
+        return JSONResponse({"ok": False, "error": exc.message}, status_code=exc.status_code)
+    except Exception as exc:
+        logger.warning("workspace preview media failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "media unavailable"}, status_code=500)
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'",
+        },
+    )
+
+
 @fastapi_app.get("/api/workspace-assets/{rel:path}")
 @fastapi_app.get("/api/sessions/{session_id}/workspace-assets/{rel:path}")
 async def workspace_assets(rel: str, session_id: str = "", work_dir: str = ""):
@@ -3696,7 +3880,7 @@ async def upload_chat_files(files: list[UploadFile] = File(...), request: Reques
                         raise _ChatUploadLimitError(f"文件“{filename}”超过 100 MB 限制。")
                     if actual_total > CHAT_UPLOAD_MAX_TOTAL_BYTES:
                         raise _ChatUploadLimitError("本次上传总大小超过 200 MB 限制。")
-                    out.write(chunk)
+                    await run_in_threadpool(out.write, chunk)
             saved.append({
                 "name": filename,
                 "path": str(dest),
@@ -3711,9 +3895,10 @@ async def upload_chat_files(files: list[UploadFile] = File(...), request: Reques
             source = Path(item["path"])
             # BMP is a documented legacy local format; convert before strict admission.
             if source.suffix.lower() == ".bmp":
-                inputs.append(store.prepare_path(source))
+                inputs.append(await run_in_threadpool(store.prepare_path, source))
             else:
-                inputs.append(SaveImageAttachment(source.read_bytes(), media_type, item["name"]))
+                data = await run_in_threadpool(source.read_bytes)
+                inputs.append(SaveImageAttachment(data, media_type, item["name"]))
         refs = await store.save_images(inputs)
         await run_in_threadpool(AttachmentRegistry(store).grant, actor.device_id, [ref["attachmentId"] for ref in refs])
         for (item, _), ref in zip(image_items, refs):
@@ -9550,7 +9735,11 @@ _ENV_GROUP_ORDER: list[tuple[str, str, list[str]]] = [
             "GREP_RIPGREP_PATH",
             "GREP_TIMEOUT_SEC",
             "GLOB_MAX_MATCHES",
+            "GLOB_TIMEOUT_SEC",
+            "GLOB_MAX_SCAN_ENTRIES",
+            "GLOB_INCLUDE_IGNORED",
             "GLOB_USE_WINDOWS_INDEX",
+            "READ_TOOL_TIMEOUT_SEC",
             "LS_MAX_ENTRIES",
             "LS_INCLUDE_LINE_COUNTS",
             "LS_LINE_COUNT_MAX_BYTES",
@@ -9654,7 +9843,11 @@ _ENV_HINTS: dict[str, str] = {
     "GREP_RIPGREP_PATH": "可选：rg/rg.exe 的完整路径；默认优先查找仓库内置 Python 和 bundled tools。",
     "GREP_TIMEOUT_SEC": "ripgrep 单次搜索超时秒数。",
     "GLOB_MAX_MATCHES": "glob 最多返回的路径条数。",
+    "GLOB_TIMEOUT_SEC": "glob 单次遍历的秒级预算，默认 60；到期返回已找到的部分结果并标注结果不完整。",
+    "GLOB_MAX_SCAN_ENTRIES": "glob 单次遍历最多检查的目录/文件条目数，默认 200000，防止大仓库或链接环把工具拖死。",
+    "GLOB_INCLUDE_IGNORED": "设为 1 时 glob 不再默认跳过 node_modules/.git/.venv 等目录；仅在确实需要搜索依赖时开启。",
     "GLOB_USE_WINDOWS_INDEX": "Windows 文件名索引加速，默认 1；设为 0 关闭。无结果或不可用时回退文件系统。",
+    "READ_TOOL_TIMEOUT_SEC": "只读工具（ls/glob/grep/read_file 等并行安全工具）的单次超时秒数，默认 300；超时返回错误并尽力让后台扫描自行停止。",
     "LS_MAX_ENTRIES": "ls/list_dir 单层目录最多列出的条目数。",
     "LS_INCLUDE_LINE_COUNTS": "是否读取可识别的文本/源码文件统计行数；默认 0（轻量目录列表），设为 1 后启用。",
     "LS_LINE_COUNT_MAX_BYTES": "ls 统计单个文本文件行数的大小上限，默认 5242880（5 MiB）；超过后跳过。",
@@ -9957,12 +10150,12 @@ async def get_plugin_catalog():
 def _find_discovered_plugin(plugin_id: str):
     """Resolve one discovered plugin for availability/diagnose endpoints."""
 
-    from agent_extensions import plugin_manager
+    from agent_extensions import plugin_definitions
     from plugins import normalize_namespace
 
     namespace = normalize_namespace(plugin_id)
     plugin = next(
-        (item for item in plugin_manager().discover() if item.plugin_id == namespace),
+        (item for item in plugin_definitions() if item.plugin_id == namespace),
         None,
     )
     if plugin is None:
@@ -11353,6 +11546,12 @@ async def refresh_web_plugin_lifecycle() -> None:
     await start_bundled_host_extensions(loaded.plugins, context)
 
 
+# Per-component teardown budgets and a strong reference to cleanup tasks that
+# outlive their wait, so a slow shutdown is never garbage collected mid-flight.
+_LIFECYCLE_CLEANUP_BUDGETS = {"execution service": 40}
+_lifecycle_cleanup_tasks: set = set()
+
+
 async def stop_webui_lifecycle() -> None:
     """Stop Web UI services shared by the default and production lifespans."""
     from agent_extensions import stop_plugin_runtime
@@ -11383,8 +11582,20 @@ async def stop_webui_lifecycle() -> None:
     errors = []
     try:
         for name, stop in cleanup:
+            # Teardown budgets are per component: the execution service waits
+            # for jobs and terminals and legitimately needs longer than a route
+            # cleanup. A 15s cap used to cancel its teardown halfway, leaving it
+            # rejecting every later call as "shutting down".
+            budget = _LIFECYCLE_CLEANUP_BUDGETS.get(name, 15)
+            task = asyncio.ensure_future(stop())
+            _lifecycle_cleanup_tasks.add(task)
+            task.add_done_callback(_lifecycle_cleanup_tasks.discard)
             try:
-                await asyncio.wait_for(stop(), timeout=15)
+                # Shield the teardown: a timeout must end the wait, not the work.
+                await asyncio.wait_for(asyncio.shield(task), timeout=budget)
+            except asyncio.TimeoutError:
+                logger.error("Lifecycle cleanup timed out: %s (%ss), letting it finish", name, budget)
+                errors.append(name + ": TimeoutError")
             except Exception as exc:
                 logger.exception("Lifecycle cleanup failed: %s", name)
                 errors.append(name + ": " + type(exc).__name__)

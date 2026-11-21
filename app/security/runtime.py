@@ -714,6 +714,15 @@ def classify_tool(tool_name: str, arguments: dict[str, Any], workspace: Path) ->
             action=action, resource=resource, effect=effect, arguments=args,
             metadata=metadata,
         )
+    if name == "reload_plugin":
+        # Control-plane mutation of one plugin's runtime, not a workspace write.
+        return CapabilityRequest.create(
+            action="tool.call",
+            resource=name,
+            effect="control",
+            arguments=args,
+            metadata={"tool": name, "declared": True},
+        )
     if name in {
         "ask_user",
         "show_user",

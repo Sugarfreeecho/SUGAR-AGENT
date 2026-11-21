@@ -114,6 +114,10 @@ class ExecutionService:
         self._lock = threading.Lock()
         self._ready = threading.Event()
         self._closing = False
+        # True once the teardown coroutine has begun. Re-entering shutdown must
+        # never run cleanup twice: the service already refuses new work, so a
+        # second call only has to stop the loop.
+        self._teardown = False
         self._recovered: set[str] = set()
         self._log_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self.suppressed: set[str] = set()
@@ -138,6 +142,7 @@ class ExecutionService:
                 return
             self._ready.clear()
             self._closing = False
+            self._teardown = False
             # A new service loop starts a fresh lifetime. An idempotent start
             # above must retain stop state while the existing loop is alive.
             self.suppressed.clear()
@@ -152,6 +157,13 @@ class ExecutionService:
                 self._loop = loop
                 self._ready.set()
                 loop.run_forever()
+                # A stop request during a cancelled teardown leaves coroutines
+                # pending; cancel them so the loop closes without leaking tasks.
+                pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                 loop.run_until_complete(loop.shutdown_asyncgens())
                 loop.run_until_complete(loop.shutdown_default_executor())
                 loop.close()
@@ -164,12 +176,19 @@ class ExecutionService:
         self.start()
         if self._closing:
             raise RuntimeError("execution service is shutting down")
-        if asyncio.get_running_loop() is self._loop:
+        return await self._call(operation, *args, **kwargs)
+
+    async def _call(self, operation, *args, **kwargs):
+        """Run one operation in the service loop, bypassing the admission gate."""
+        loop = self._loop
+        if loop is None:
+            raise RuntimeError("execution service is not running")
+        if asyncio.get_running_loop() is loop:
             return await operation(*args, **kwargs)
         # Do not carry a live Agent state or ContextVar authorization into the
         # long-lived service. Each operation receives its explicit trusted spec.
         def submit():
-            return asyncio.run_coroutine_threadsafe(operation(*args, **kwargs), self._loop)
+            return asyncio.run_coroutine_threadsafe(operation(*args, **kwargs), loop)
         future = contextvars.Context().run(submit)
         return await asyncio.wrap_future(future)
 
@@ -680,8 +699,23 @@ class ExecutionService:
             self.jobs.pop(identifier, None)
 
     async def shutdown(self):
-        if not self._thread or not self._thread.is_alive():
+        thread = self._thread
+        if not thread or not thread.is_alive():
+            # A fresh lifetime starts on the next call(); drop the stale handles
+            # so a cancelled teardown can never poison the admission gate.
+            self._thread = None
+            self._loop = None
+            self._closing = False
+            self._teardown = False
             return
+        if self._teardown or self._loop is None:
+            # An earlier teardown was cancelled after its 15s budget expired.
+            # Cleaning up twice is unsafe, but leaving the loop running keeps
+            # every call failing as "shutting down", so finish the stop here.
+            self._request_loop_stop()
+            await self._join_loop(thread)
+            return
+        self._teardown = True
         async def clean():
             with self._lock:
                 callbacks = tuple(self._shutdown_callbacks)
@@ -695,9 +729,34 @@ class ExecutionService:
             tasks = [j.task for j in self.jobs.values() if j.task and not j.task.done()]
             if tasks:
                 await asyncio.wait(tasks, timeout=8)
-        await self.call(clean)
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        await asyncio.to_thread(self._thread.join, 10)
+        try:
+            await self._call(clean)
+        finally:
+            # Cancellation still has to release the loop; otherwise the process
+            # keeps an unusable service and every later restart fails at once.
+            self._request_loop_stop()
+        await self._join_loop(thread)
+
+    def _request_loop_stop(self) -> None:
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass
+
+    async def _join_loop(self, thread) -> None:
+        if thread is not None and thread.is_alive():
+            await asyncio.to_thread(thread.join, 10)
+        if thread is not None and thread.is_alive():
+            # The loop is still wedged: keep the handles so a later shutdown can
+            # retry instead of leaking a second service loop.
+            self._teardown = False
+            return
+        self._thread = None
+        self._loop = None
+        self._closing = False
+        self._teardown = False
 
 
 def terminate_process(process, created=None):
