@@ -963,10 +963,6 @@ button, input, select, textarea { font-family: var(--sans);
     background: var(--blue-accent, #89b4fa);
     box-shadow: 0 0 0 3px rgba(137, 180, 250, 0.12), 0 0 9px rgba(137, 180, 250, 0.38);
 }
-.sidebar-runtime.is-alert .sidebar-runtime-dot {
-    background: var(--red-accent);
-    box-shadow: 0 0 0 3px rgba(243, 139, 168, 0.12), 0 0 8px rgba(243, 139, 168, 0.34);
-}
 .sidebar-runtime-version {
     flex: 0 0 auto;
     color: var(--text-placeholder);
@@ -4388,7 +4384,7 @@ body.session-group-drag-active .session-group-head * { cursor: grabbing !importa
 .followup-queue-row {
     position: relative;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
     align-items: center;
     gap: 0.36rem;
     min-height: 2.1rem;

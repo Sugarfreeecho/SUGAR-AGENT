@@ -209,9 +209,29 @@ async def invoke_show_user(context, arguments):
         return ToolOutcome.failed("presentation_failed", str(exc))
 
 
+def _display_ui_event_loaders(manager, session_id):
+    """Yield the loaders that hold this session's displayed UI history.
+
+    Runtime V2 keeps display facts in the session event log, so its sessions
+    have no legacy ``ui_events.json`` file. Reading only the legacy accessor
+    therefore made every saved presentation (and the image route that resolves
+    it) unresolvable, even though the same facts render fine in the chat.
+    """
+    active_runtime = getattr(manager, "_load_ui_events_for_active_runtime", None)
+    if callable(active_runtime):
+        yield active_runtime
+    yield manager.get_ui_events_for_display
+
+
 def saved_presentation(manager, session_id, presentation_id):
-    for event in reversed(manager.get_ui_events_for_display(session_id)):
-        record = event.get("presentation") if event.get("type") == "show_user" else None
-        if isinstance(record, dict) and record.get("presentation_id") == presentation_id:
-            return copy.deepcopy(record)
+    for loader in _display_ui_event_loaders(manager, session_id):
+        try:
+            events = loader(session_id)
+        except Exception:
+            logger.warning("Failed to read displayed UI events session=%s", session_id, exc_info=True)
+            continue
+        for event in reversed(events or []):
+            record = event.get("presentation") if isinstance(event, dict) and event.get("type") == "show_user" else None
+            if isinstance(record, dict) and record.get("presentation_id") == presentation_id:
+                return copy.deepcopy(record)
     raise LookupError("presentation not found")

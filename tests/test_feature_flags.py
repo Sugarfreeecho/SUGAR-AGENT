@@ -445,16 +445,19 @@ def test_followups_auto_continue_only_after_run_end_and_sync():
     assert "item.deferUntilRunEnd" in sse
 
 
-def test_followup_supports_interrupt_and_append_modes():
+def test_followup_modes_are_merged_into_immediate_interrupt():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     events = (ROOT / "frontend/src/app/modules/event-dispatch.js").read_text(encoding="utf-8")
     loop = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
     webui = (ROOT / "app/webui.py").read_text(encoding="utf-8")
 
-    assert "function createFollowupModePicker(item, sessionId)" in sse
-    assert "return item.steerMode === 'append' ? 'append' : 'interrupt';" in sse
-    assert "item.steerMode = mode === 'append' ? 'append' : 'interrupt';" in sse
-    assert "document.body.appendChild(menu);" in sse
+    # 用户侧只保留一种发送方式：运行中显式发送一律立即插话；不再渲染
+    # “打断/追加”选择器。旧队列项与 API 客户端仍可携带 append。
+    assert "function defaultSteerMode() {" in sse
+    assert "return 'interrupt';" in sse
+    assert "createFollowupModePicker" not in sse
+    assert "row.appendChild(modePicker)" not in sse
+    assert "item.steerMode = item.steerMode === 'append' ? 'append' : 'interrupt';" in sse
     assert "followupQueueRenderSignature" in sse
     assert "panel.dataset.renderSignature === renderSignature" in sse
     assert "mode: steerMode === 'append' ? 'append' : 'interrupt'" in sse
@@ -471,6 +474,19 @@ def test_followup_supports_interrupt_and_append_modes():
     # 既有 2 处 + 畸形工具调用/最终结果重试 2 处 + 执行与恢复等待重试 3 处
     assert loop.count("max_react_iter = max(max_react_iter, iter_count + 1)") == 7
     assert 'if str(item.get("mode") or steer_mode) == "append":' in webui
+
+
+def test_background_tools_are_not_rendered_as_interrupted():
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+
+    # A tool handed to the background keeps executing: its row must say so
+    # instead of inheriting the run's "已中断" label.
+    assert "background:'已转入后台，继续执行'" in rendering
+    assert "[后台执行完成]" in rendering
+    assert "background_execution:!!event.background_execution" in rendering
+    assert "parsed.preserve_tool_call_ids" in sse
+    assert "record.status = 'background';" in sse
 
 
 def test_model_profile_selector_fences_cross_session_responses():

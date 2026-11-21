@@ -1923,7 +1923,7 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
         row = findToolCallRow(ctx, String(record.tool_call_id));
         if (row && row.dataset.executionId && row.dataset.executionId !== String(record.execution_id)) row = null;
     }
-    var labels = {waiting_approval:'等待审批', waiting_input:'等待回答', interrupted:'已中断', unknown:'执行状态未知', timed_out:'已超时', failed:'执行失败'};
+    var labels = {waiting_approval:'等待审批', waiting_input:'等待回答', background:'已转入后台，继续执行', interrupted:'已中断', unknown:'执行状态未知', timed_out:'已超时', failed:'执行失败'};
     var text = String(record.content || '');
     if (record.kind === 'tool') {
         var isExecuting = record.status === 'waiting_execution' || record.status === 'running';
@@ -1938,6 +1938,9 @@ function renderExecutionRecord(ctx, record, sessionId, opts) {
         if (isExecuting) text = formatToolPendingLine(record.tool, record.args, text);
     }
     if (labels[record.status]) text += '\n[' + labels[record.status] + ']';
+    if (record.kind === 'tool' && record.background_execution && record.status === 'completed') {
+        text += '\n[后台执行完成]';
+    }
     // Animate live text only. History and recovery snapshots install their
     // authoritative body immediately, without replaying old typing animations.
     var smoothText = opts.smoothText === true && record.status === 'generating'
@@ -2037,7 +2040,7 @@ function renderExecutionEvent(ctx, event, sessionId) {
             if (event[key] !== undefined && event[key] !== null) update[key] = event[key];
         });
     }
-    else if (type === 'tool_call') Object.assign(update, {status:event.execution_status || (event.status && event.status.timed_out ? 'timed_out' : event.status && event.status.ok === false ? 'failed' : 'completed'), tool:event.tool, args:event.args, result:event.result || event.raw_content, command_preview:event.command_preview, tool_call_id:event.tool_call_id, attachments:event.attachments || [], ui_committed:true}, event.ui ? {ui:event.ui} : null);
+    else if (type === 'tool_call') Object.assign(update, {status:event.execution_status || (event.status && event.status.timed_out ? 'timed_out' : event.status && event.status.ok === false ? 'failed' : 'completed'), tool:event.tool, args:event.args, result:event.result || event.raw_content, command_preview:event.command_preview, tool_call_id:event.tool_call_id, attachments:event.attachments || [], background_execution:!!event.background_execution, ui_committed:true}, event.ui ? {ui:event.ui} : null);
     else if (type === 'llm_reasoning_delta' || type === 'llm_response_delta') Object.assign(update, {status:'generating'},
         event.replayed_snapshot ? {content:event.delta || ''} : {text_delta:event.delta || ''});
     else if (type === 'llm_reasoning' || type === 'llm_response') Object.assign(update, {status:event.execution_status || 'completed', content:event.content || '', ui_committed:true});

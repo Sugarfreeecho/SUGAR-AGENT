@@ -59,6 +59,7 @@
 
   function renderKpis(data) {
     var runs = data.concurrency || {};
+    var process = data.process || {};
     var ratio = data.threads_per_run;
     var cards = [
       {
@@ -67,6 +68,17 @@
         hint: '增量 ' + (num(data.delta_threads) > 0 ? '+' : '') + fmt(data.delta_threads)
           + ' · 峰值 ' + fmt(data.peak_threads) + ' · 基线 ' + fmt(data.baseline_threads),
         tone: num(data.delta_threads) > 0 ? 'up' : '',
+      },
+      {
+        // 本进程之外的子进程（MCP 服务、插件隔离 worker、PTY shell）不在
+        // thread_total 里，这里只给一个子树合计。
+        label: '进程树线程',
+        value: process.tree_threads == null ? '—' : fmt(process.tree_threads),
+        hint: process.child_threads == null
+          ? '子树探测不可用'
+          : '本进程 ' + fmt(process.num_threads) + ' · 子树 ' + fmt(process.child_threads)
+            + '（' + fmt(process.child_processes) + ' 个子进程）',
+        tone: '',
       },
       {
         label: '业务并发',
@@ -79,7 +91,7 @@
       {
         label: '线程 / 并发',
         value: ratio == null ? '—' : fmt(ratio, 2),
-        hint: ratio == null ? '当前没有活动运行' : '每个活动运行平均占用线程数',
+        hint: ratio == null ? '当前没有活动运行' : '每个活动运行平均占用线程数（仅本进程，不含子进程）',
         tone: '',
       },
       {
@@ -212,6 +224,9 @@
     var facts = [
       ['PID', fmt(process.pid)],
       ['进程线程数（psutil）', fmt(process.num_threads)],
+      ['子进程数', process.child_processes == null ? '—' : fmt(process.child_processes)],
+      ['子树线程数', process.child_threads == null ? '—' : fmt(process.child_threads)],
+      ['进程树线程数', process.tree_threads == null ? '—' : fmt(process.tree_threads)],
       ['进程运行时长', process.uptime_seconds == null ? '—' : clock(process.uptime_seconds)],
       ['常驻内存', process.rss_mb == null ? '—' : fmt(process.rss_mb, 1) + ' MB'],
       ['采样器运行时长', process.monitor_uptime_seconds == null ? '—' : clock(process.monitor_uptime_seconds)],

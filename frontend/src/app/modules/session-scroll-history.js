@@ -1727,13 +1727,19 @@ function showOpenFileFeedback(msg) {
         if (!a) return;
         ev.preventDefault();
         var rel = a.getAttribute('data-workspace-open') || '';
-        // The details column owns the file-open policy now: text files open
-        // inline there, everything else still goes to the system app. Older
-        // bundles without the dock keep the plain system-open path below.
+        // The details column owns the file-open policy now: text, PDF and
+        // office documents open inline there, everything else still goes to
+        // the system app. Older bundles without the dock keep the plain
+        // system-open path below.
         if (rel && typeof globalThis !== 'undefined' && globalThis.MyAgentDock
-            && typeof globalThis.MyAgentDock.isTextPath === 'function'
+            && (typeof globalThis.MyAgentDock.isTextPath === 'function'
+                || typeof globalThis.MyAgentDock.isPreviewPath === 'function')
             && typeof globalThis.MyAgentDock.openPathSmart === 'function') {
-            if (globalThis.MyAgentDock.isTextPath(rel)) {
+            var inline = (typeof globalThis.MyAgentDock.isTextPath === 'function'
+                && globalThis.MyAgentDock.isTextPath(rel))
+                || (typeof globalThis.MyAgentDock.isPreviewPath === 'function'
+                    && globalThis.MyAgentDock.isPreviewPath(rel));
+            if (inline) {
                 globalThis.MyAgentDock.openPathSmart(rel);
                 showOpenFileFeedback('已在详情栏打开');
             } else {

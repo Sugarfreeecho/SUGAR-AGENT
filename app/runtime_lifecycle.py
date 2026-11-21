@@ -23,6 +23,9 @@ from typing import Any
 TERMINAL = frozenset({"completed", "denied", "cancelled", "failed"})
 EXECUTING = frozenset({"authorized", "checkpointed", "draining", "stopping", "starting", "recovering"})
 ENV_PREFIX = "MYAGENT_LIFECYCLE_"
+# Flipped as soon as a prepare starts dismantling the runtime. A failed handoff
+# after that point can no longer keep serving, so the process has to exit.
+_prepare_state: dict[str, bool] = {"teardown_started": False}
 
 
 class LifecycleConflict(ValueError):
@@ -526,16 +529,28 @@ def register_routes(app, manager) -> None:
             if record["target_instance_id"] != service.instance_id or record["phase"] != "draining":
                 return JSONResponse({"error": "stale_restart"}, status_code=409)
             service.draining = True
+            _prepare_state["teardown_started"] = False
             try:
                 from session_event_bus import publish_lifecycle_event
                 await publish_lifecycle_event(record)
-                warnings = await asyncio.wait_for(prepare_runtime(manager), timeout=55)
+                warnings = await asyncio.wait_for(prepare_runtime(manager), timeout=60)
                 service.store.transition(record["restart_id"], "draining", expected={"draining"}, cleanup_warnings=warnings)
                 from starlette.background import BackgroundTask
                 return JSONResponse({"ok": True, "instance_id": service.instance_id, "exiting": _exit_callback is not None},
                                     background=BackgroundTask(_exit_callback) if _exit_callback is not None else None)
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
                 service.store.transition(record["restart_id"], "failed", error="保存运行状态失败：" + str(exc))
+                if _prepare_state["teardown_started"] and _exit_callback is not None:
+                    # The runtime is already dismantled, so staying alive would
+                    # serve a half-dead backend and fail every later restart.
+                    # Exit and let the supervisor replace the process.
+                    asyncio.get_running_loop().call_later(.5, _exit_callback)
+                else:
+                    # Nothing was torn down yet: keep serving instead of leaving
+                    # the backend draining and blocking every session.
+                    service.draining = False
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
                 return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
@@ -543,6 +558,7 @@ async def prepare_runtime(manager) -> list[str]:
     """Freeze admission before bounded cancellation and explicit durable flushes."""
     from session_lifecycle import active_run_rows, cancel_run_tasks
     warnings = []
+    _prepare_state["teardown_started"] = True
     module = sys.modules.get("agent_subagent")
     registry = getattr(module, "subagent_registry", None)
     child_runs = registry.running_runs() if registry else {}
@@ -553,18 +569,26 @@ async def prepare_runtime(manager) -> list[str]:
     if registry:
         await registry.cancel_for_restart()
     webui = sys.modules.get("webui")
+    stopped_webui = False
     if webui is not None and getattr(webui, "session_manager", None) is manager:
         from agent_team.tools import stop_auto_scheduler
-        for stop in (stop_auto_scheduler, webui.stop_webui_lifecycle):
+        # The Web UI teardown owns the longest step: the execution service waits
+        # for jobs and terminals, so it needs a budget of its own here too.
+        for stop, budget in ((stop_auto_scheduler, 10), (webui.stop_webui_lifecycle, 45)):
             try:
-                await asyncio.wait_for(stop(), timeout=20)
-            except Exception as exc:
-                warnings.append(str(exc))
+                await asyncio.wait_for(stop(), timeout=budget)
+            except (Exception, asyncio.CancelledError) as exc:
+                warnings.append(f"{type(exc).__name__}: {exc}")
+        # stop_webui_lifecycle already tears the execution service down; running
+        # it a second time used to raise "execution service is shutting down"
+        # after the first teardown had closed the admission gate.
+        stopped_webui = True
     import runtime_observability
     import execution_metrics
     await asyncio.to_thread(runtime_observability.flush)
     await asyncio.to_thread(execution_metrics.flush)
-    from execution_services.jobs import _SERVICE
-    if _SERVICE is not None:
-        await _SERVICE.shutdown()
+    if not stopped_webui:
+        from execution_services.jobs import _SERVICE
+        if _SERVICE is not None:
+            await _SERVICE.shutdown()
     return warnings

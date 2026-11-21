@@ -14,6 +14,7 @@
 | 组 | 含义 | 数据来源 |
 | --- | --- | --- |
 | 进程 OS 线程 | 本进程当前真实线程数、按创建来源折叠的分组、累计 CPU、存活时长 | `psutil.Process().threads()`，并用 `threading.Thread.native_id` 关联出线程名与 daemon 标记 |
+| 进程树线程 | 本进程 + 全部后代的线程合计（只有总数，不展开明细） | `psutil.Process().children(recursive=True)` 逐个累加 `num_threads()` |
 | 业务并发 | 根会话 run、子代理 run、后台任务、PTY 终端、Agent Team 会话 | `session_lifecycle` 的 run 注册表、`agent_subagent.subagent_registry`、执行服务的 job/terminal 表、`agent_team.service` |
 
 另有两项辅助数字：
@@ -48,7 +49,8 @@ POST /api/thread-monitor/reset          # 只重置本面板的基线与峰值
                   "pending_interactions": 0, "active_team_sessions": 0, "total": 4, "sessions": []},
   "history": [{"timestamp": 1761..., "thread_total": 42, "concurrency_total": 4}],
   "suspected_leaks": [{"thread_id": 12345, "name": "...", "group": "...", "alive_seconds": 420.5}],
-  "process": {"pid": 1234, "num_threads": 42, "uptime_seconds": 3600.2, "rss_mb": 512.4},
+  "process": {"pid": 1234, "num_threads": 42, "uptime_seconds": 3600.2, "rss_mb": 512.4,
+              "child_processes": 7, "child_threads": 58, "tree_threads": 100},
   "errors": [], "running": true,
   "interval_seconds": 1.0, "leak_suspect_seconds": 300.0, "threads_per_run": 10.5
 }}
@@ -80,6 +82,6 @@ python scripts\selfcheck_thread_monitor.py --full   # 同时探测宿主注册�
 
 ## 已知边界
 
-- 只统计**本进程**。`execution-services` 的后台任务虽然跑在独立线程里，仍属于本进程，能被看到；子进程（PTY 里的 shell、外部 CLI）不在统计内。
+- **线程明细只覆盖本进程**。`execution-services` 的后台任务跑在独立线程里，仍属于本进程，能被看到；子进程（MCP 服务、插件隔离 worker、PTY 里的 shell、外部 CLI）不在 `thread_total` 内，只在 `process.child_threads` / `process.tree_threads` 里给出一个合计，不展开到单进程。
 - 由原生库创建、没有对应 Python 对象的线程统一显示为 `tid-<id>`。
 - 并发表里的会话名来自 `session_manager.index`（内存），因此只覆盖当前进程已知的会话。

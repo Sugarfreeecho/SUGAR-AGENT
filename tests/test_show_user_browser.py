@@ -76,6 +76,9 @@ def test_plugin_console_reuses_live_plugin_frame_and_binds_source_chat(presentat
     page.evaluate("presentation.presentation={...presentation.presentation,kind:'plugin',plugin_id:'demo',page_id:'main'}")
     _render(page)
     page.wait_for_selector('.dock-plugin-page iframe')
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('.dock-plugin-page iframe')]"
+        ".some(f => f.contentWindow && f.contentWindow.bound === 's1')")
     frame = next(frame for frame in page.frames if '/plugins/demo' in frame.url)
     frame.wait_for_function("window.bound==='s1'")
     identity = frame.evaluate('window.instance')

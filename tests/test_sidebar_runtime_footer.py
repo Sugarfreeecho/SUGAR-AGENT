@@ -51,3 +51,15 @@ def test_sidebar_runtime_footer_has_theme_aware_styles() -> None:
     assert ".sidebar-runtime.is-waiting .sidebar-runtime-dot" in styles
     assert ".sidebar-runtime.is-offline .sidebar-runtime-dot" in styles
     assert ":root.theme-light .sidebar-runtime" in styles
+
+
+def test_sidebar_runtime_footer_drops_service_alert_state() -> None:
+    """左下角 Runtime 状态只表达连通性；服务端 alert 不再渲染成红色告警。"""
+
+    source = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend/src/styles/app.css").read_text(encoding="utf-8")
+
+    assert "Runtime 告警" not in source
+    assert "if (state === 'alert') state = 'online';" in source
+    assert "['online', 'busy', 'waiting', 'offline']" in source
+    assert ".sidebar-runtime.is-alert" not in styles

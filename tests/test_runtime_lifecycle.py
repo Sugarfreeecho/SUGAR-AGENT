@@ -371,3 +371,54 @@ def test_prepare_ack_commits_state_before_requesting_server_exit(lifecycle, monk
 def test_ready_needs_protocol_and_expected_identity(monkeypatch, payload):
     monkeypatch.setattr("lifecycle_supervisor.request_json", lambda *a, **k: payload)
     assert not backend_ready("http://test", "x")
+
+
+def test_failed_prepare_after_teardown_exits_instead_of_serving(lifecycle, monkeypatch):
+    """A dismantled backend must not stay alive and fail every later restart."""
+    from fastapi import FastAPI
+    import runtime_lifecycle
+    service, mailbox, _ = lifecycle
+    monkeypatch.setattr(runtime_lifecycle, "_service", service)
+    exits = []
+    async def broken(_):
+        runtime_lifecycle._prepare_state["teardown_started"] = True
+        raise RuntimeError("execution service is shutting down")
+    monkeypatch.setattr(runtime_lifecycle, "prepare_runtime", broken)
+    monkeypatch.setattr(runtime_lifecycle, "_exit_callback", lambda: exits.append(True))
+    record = service.request(reason="manual")
+    approve(service, record)
+    claimed = mailbox.tick()
+    app = FastAPI()
+    runtime_lifecycle.register_routes(app, service.manager)
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            result = await client.post("/api/lifecycle/prepare", json={"restart_id": claimed["restart_id"]},
+                                       headers={"X-MyAgent-Supervisor": mailbox.token})
+            assert result.status_code == 500
+            await asyncio.sleep(.8)
+    asyncio.run(scenario())
+    assert exits == [True]
+    assert service.store.read(record["restart_id"])["phase"] == "failed"
+
+
+def test_failed_prepare_before_teardown_keeps_serving(lifecycle, monkeypatch):
+    from fastapi import FastAPI
+    import runtime_lifecycle
+    service, mailbox, _ = lifecycle
+    monkeypatch.setattr(runtime_lifecycle, "_service", service)
+    async def broken(_):
+        raise RuntimeError("nothing was torn down")
+    monkeypatch.setattr(runtime_lifecycle, "prepare_runtime", broken)
+    monkeypatch.setattr(runtime_lifecycle, "_exit_callback", lambda: pytest.fail("must not exit"))
+    record = service.request(reason="manual")
+    approve(service, record)
+    claimed = mailbox.tick()
+    app = FastAPI()
+    runtime_lifecycle.register_routes(app, service.manager)
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            result = await client.post("/api/lifecycle/prepare", json={"restart_id": claimed["restart_id"]},
+                                       headers={"X-MyAgent-Supervisor": mailbox.token})
+            assert result.status_code == 500
+    asyncio.run(scenario())
+    assert service.draining is False

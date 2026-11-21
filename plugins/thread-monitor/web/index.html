@@ -6,7 +6,7 @@
   <title>线程监控</title>
   <link rel="icon" type="image/png" href="/assets/sugar-logo.png">
   <link rel="apple-touch-icon" href="/assets/sugar-logo.png">
-  <link rel="stylesheet" href="/plugin-assets/thread-monitor/style.css?v=1">
+  <link rel="stylesheet" href="/plugin-assets/thread-monitor/style.css?v=2">
 </head>
 <body>
   <header class="tm-topbar">
@@ -75,10 +75,11 @@
     <p class="tm-foot">
       数据来源：<code>psutil</code> 读取本进程线程表，并与 <code>threading.Thread.native_id</code> 关联出线程名；
       并发量读取会话运行时、子代理注册表、后台任务、PTY 终端、Agent Team 与待处理交互的现有注册表。
+      子进程（MCP 服务、插件隔离 worker、PTY shell）与宿主不共享地址空间，只汇总为「进程树线程」，不展开明细。
       页面只读，不改变 Agent 状态；“重置峰值”只清空本面板的基线与峰值。
     </p>
   </main>
 
-  <script src="/plugin-assets/thread-monitor/app.js?v=1"></script>
+  <script src="/plugin-assets/thread-monitor/app.js?v=2"></script>
 </body>
 </html>

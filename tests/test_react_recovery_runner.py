@@ -53,6 +53,96 @@ def test_discover_recoverable_react_sessions_finds_background_sessions(monkeypat
     assert all(reason == "no_local_activity" and respect_grace is True for _, reason, respect_grace in cleaned)
 
 
+def test_workflow_session_still_reconciles_a_dead_owner_run(monkeypatch):
+    """A Goal session's ghost run must be closed even though the Goal resumes it."""
+    import webui
+    from run_ownership import RunFenceOwner
+    from workflow_extensions import session_workflows
+
+    cleaned = []
+
+    class FakeSessionManager:
+        @staticmethod
+        def can_continue_react_session(_sid):
+            return True
+
+    monkeypatch.setattr(webui, "session_manager", FakeSessionManager())
+    monkeypatch.setattr(webui, "_has_local_worker_activity", lambda _sid: False)
+    monkeypatch.setattr(webui, "_active_chat_by_session", {})
+    monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("dead", 1234, "run-1"))
+    monkeypatch.setattr(webui, "_runtime_v2_snapshot", lambda _sid: {"active_runs": [{"run_id": "run-1"}]})
+    monkeypatch.setattr(
+        webui, "_cleanup_orphan_runtime_v2_active_runs",
+        lambda sid, reason, **kwargs: cleaned.append(
+            (sid, reason, kwargs.get("respect_grace"), kwargs.get("snapshot") is not None)
+        ) or 1,
+    )
+    monkeypatch.setattr(session_workflows, "continuation_source", lambda _sid: "agent-goal")
+
+    assert webui._is_recoverable_react_session("goal-session") is False
+    assert cleaned == [("goal-session", "no_local_activity", False, True)]
+
+
+def test_run_has_live_owner_matches_the_fenced_run(monkeypatch):
+    import webui
+    from run_ownership import RunFenceOwner
+
+    monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("live", 42, "run-a"))
+    assert webui.run_has_live_owner("s", "run-a") is True
+    assert webui.run_has_live_owner("s", "run-b") is False
+
+    monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("unknown", 42, "run-a"))
+    assert webui.run_has_live_owner("s", "run-a") is True  # unverifiable fence fails closed
+    assert webui.run_has_live_owner("s", "run-b") is False  # the fence names another run
+
+    monkeypatch.setattr(webui, "_react_run_fence_owner", lambda _sid: RunFenceOwner("dead", 42, "run-a"))
+    assert webui.run_has_live_owner("s", "run-a") is False
+
+
+def test_reconcile_orphaned_control_operations_closes_only_dead_owners(monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    import webui
+    from run_ownership import RunFenceOwner
+    from session_control import public as control_public
+
+    updated = []
+
+    class FakeStore:
+        @staticmethod
+        def operations(*, status=None, limit=100):
+            assert status == "running"
+            now = time.time()
+            return [
+                {"id": "op-dead", "session_id": "s-dead", "run_id": "run-1",
+                 "method": "session.continue", "updated": now - 600},
+                {"id": "op-live", "session_id": "s-live", "run_id": "run-2",
+                 "method": "session.continue", "updated": now - 600},
+                {"id": "op-young", "session_id": "s-fresh", "run_id": "run-3",
+                 "method": "session.continue", "updated": now - 1},
+            ]
+
+        @staticmethod
+        def update_operation(oid, *, expected=None, **fields):
+            updated.append((oid, expected, fields.get("status")))
+            return True
+
+    monkeypatch.setattr(
+        control_public, "control_application",
+        lambda: SimpleNamespace(service=SimpleNamespace(store=FakeStore())),
+    )
+    monkeypatch.setattr(webui, "_has_local_run_activity", lambda _sid: False)
+    monkeypatch.setattr(webui, "_has_running_subagent_activity", lambda _sid: False)
+    monkeypatch.setattr(
+        webui, "_react_run_fence_owner",
+        lambda sid: RunFenceOwner("live", 1, "run-2") if sid == "s-live" else RunFenceOwner("dead", 2, "run-1"),
+    )
+
+    assert asyncio.run(webui.reconcile_orphaned_control_operations()) == 1
+    assert updated == [("op-dead", "running", "interrupted")]
+
+
 def test_fence_discovery_ignores_sessions_without_a_fence(monkeypatch, tmp_path):
     import webui
 

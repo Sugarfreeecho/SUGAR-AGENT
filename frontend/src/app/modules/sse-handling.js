@@ -707,8 +707,19 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                         if (runCtx) runCtx.preserveInterruptedPartial = preserveInterruptedPartial;
                         if (parsed.preserve_execution_records) {
                             var savedRecords = executionRecordsBySession.get(String(runSessionId));
+                            var movedToolCalls = Object.create(null);
+                            (parsed.preserve_tool_call_ids || []).forEach(function (toolCallId) {
+                                movedToolCalls[String(toolCallId)] = true;
+                            });
                             if (savedRecords) savedRecords.forEach(function (record) {
                                 if (record.run_id === parsed.run_id && ['completed','failed','timed_out','interrupted','unknown'].indexOf(record.status) < 0) {
+                                    if (movedToolCalls[String(record.tool_call_id || '')]) {
+                                        // The tool left this run but keeps
+                                        // executing; do not label it as stopped.
+                                        record.status = 'background';
+                                        renderExecutionRecord(runCtx, record, runSessionId);
+                                        return;
+                                    }
                                     if (['output_length','truncated_after_closed_tool_call','transport_after_closed_tool_call'].indexOf(parsed.reason) >= 0 && record.status !== 'generating') return;
                                     record.status = 'interrupted';
                                     renderExecutionRecord(runCtx, record, runSessionId);
@@ -1486,9 +1497,12 @@ function followupQueueStorageKey(sessionId) {
 }
 
 function defaultSteerMode() {
-    return String(window.__MYAGENT_STEER_MODE__ || 'append').toLowerCase() === 'interrupt'
-        ? 'interrupt'
-        : 'append';
+    // Interrupt and append are merged in the composer: every follow-up sent
+    // while the agent runs starts a new round immediately, and tools already
+    // executing are handed to the background instead of being cancelled.
+    // Legacy queue items keep their stored mode so an item admitted before
+    // this change is not silently rewritten.
+    return 'interrupt';
 }
 
 function normalizeStoredFollowupItem(item) {
@@ -1955,15 +1969,6 @@ function positionFollowupQueuePanel() {
     panel.style.width = '';
 }
 
-var activeFollowupModePickerClose = null;
-
-function closeActiveFollowupModePicker() {
-    if (typeof activeFollowupModePickerClose !== 'function') return;
-    var close = activeFollowupModePickerClose;
-    activeFollowupModePickerClose = null;
-    close();
-}
-
 function followupQueueRenderSignature(sessionId, queue) {
     var sid = String(sessionId || '');
     var running = !!(isSessionRunning(sid) || isServerStreamActive(sid));
@@ -1987,193 +1992,6 @@ function followupQueueRenderSignature(sessionId, queue) {
         };
     });
     return JSON.stringify({ sid: sid, running: running, humanQuestionCount: humanQuestionCount, items: items });
-}
-
-function refreshFollowupQueueRenderSignature(sessionId) {
-    var sid = String(sessionId || '');
-    var panel = document.getElementById('followup-queue-panel');
-    if (!panel || panel.dataset.sessionId !== sid) return;
-    panel.dataset.renderSignature = followupQueueRenderSignature(sid, getFollowupQueue(sid));
-}
-
-function createFollowupModePicker(item, sessionId) {
-    var picker = document.createElement('div');
-    picker.className = 'followup-mode-picker';
-    var choices = [
-        { value: 'interrupt', label: '打断', description: '立即插入当前运行' },
-        { value: 'append', label: '追加', description: '下一轮继续处理' },
-    ];
-    var visualSelect = document.createElement('select');
-    visualSelect.className = 'followup-queue-mode';
-    visualSelect.setAttribute('aria-hidden', 'true');
-    visualSelect.tabIndex = -1;
-    choices.forEach(function (choice) {
-        var visualOption = document.createElement('option');
-        visualOption.value = choice.value;
-        visualOption.textContent = choice.label;
-        visualSelect.appendChild(visualOption);
-    });
-    var direction = document.createElement('span');
-    direction.className = 'followup-mode-direction';
-    direction.setAttribute('aria-hidden', 'true');
-    var trigger = document.createElement('button');
-    trigger.type = 'button';
-    trigger.className = 'followup-mode-hit-target';
-    trigger.setAttribute('aria-label', '追问发送模式');
-    trigger.setAttribute('aria-haspopup', 'listbox');
-    trigger.setAttribute('aria-expanded', 'false');
-    trigger.disabled = !!item.status;
-    visualSelect.disabled = !!item.status;
-
-    var menu = document.createElement('div');
-    menu.className = 'followup-mode-menu';
-    menu.setAttribute('role', 'listbox');
-    menu.setAttribute('aria-label', '选择追问发送模式');
-    menu.hidden = true;
-    var optionRows = [];
-    var outsideHandler = null;
-
-    function currentMode() {
-        return item.steerMode === 'append' ? 'append' : 'interrupt';
-    }
-
-    function sync() {
-        var mode = currentMode();
-        picker.dataset.mode = mode;
-        visualSelect.value = mode;
-        optionRows.forEach(function (row) {
-            var selected = row.dataset.mode === mode;
-            row.classList.toggle('is-selected', selected);
-            row.setAttribute('aria-selected', selected ? 'true' : 'false');
-        });
-    }
-
-    function closeMenu() {
-        menu.hidden = true;
-        picker.classList.remove('is-open');
-        trigger.setAttribute('aria-expanded', 'false');
-        menu.style.left = '';
-        menu.style.top = '';
-        menu.style.width = '';
-        menu.style.maxHeight = '';
-        if (menu.parentNode !== picker) picker.appendChild(menu);
-        if (outsideHandler) {
-            document.removeEventListener('pointerdown', outsideHandler, true);
-            window.removeEventListener('resize', closeMenu);
-            outsideHandler = null;
-        }
-        if (activeFollowupModePickerClose === closeMenu) activeFollowupModePickerClose = null;
-    }
-
-    function openMenu(focusSelected) {
-        if (trigger.disabled) return;
-        closeActiveFollowupModePicker();
-        document.body.appendChild(menu);
-        menu.hidden = false;
-        picker.classList.add('is-open');
-        trigger.setAttribute('aria-expanded', 'true');
-        var triggerRect = trigger.getBoundingClientRect();
-        var viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-        var viewportHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
-        var menuWidth = Math.min(202, Math.max(150, viewportWidth - 16));
-        menu.style.width = menuWidth + 'px';
-        var menuHeight = menu.getBoundingClientRect().height;
-        var roomBelow = viewportHeight - triggerRect.bottom - 8;
-        var roomAbove = triggerRect.top - 8;
-        var openBelow = roomBelow >= menuHeight || roomBelow >= roomAbove;
-        var availableHeight = Math.max(76, (openBelow ? roomBelow : roomAbove) - 6);
-        var left = Math.min(
-            Math.max(8, triggerRect.right - menuWidth),
-            Math.max(8, viewportWidth - menuWidth - 8)
-        );
-        var top = openBelow
-            ? Math.min(viewportHeight - 8, triggerRect.bottom + 5)
-            : Math.max(8, triggerRect.top - Math.min(menuHeight, availableHeight) - 5);
-        menu.style.left = left + 'px';
-        menu.style.top = top + 'px';
-        menu.style.maxHeight = availableHeight + 'px';
-        activeFollowupModePickerClose = closeMenu;
-        outsideHandler = function (event) {
-            if (!picker.contains(event.target) && !menu.contains(event.target)) closeMenu();
-        };
-        document.addEventListener('pointerdown', outsideHandler, true);
-        window.addEventListener('resize', closeMenu);
-        if (focusSelected) {
-            var selectedRow = optionRows.find(function (row) { return row.getAttribute('aria-selected') === 'true'; });
-            if (selectedRow) requestAnimationFrame(function () { selectedRow.focus(); });
-        }
-    }
-
-    function chooseMode(mode) {
-        item.steerMode = mode === 'append' ? 'append' : 'interrupt';
-        persistFollowupQueue(sessionId);
-        sync();
-        refreshFollowupQueueRenderSignature(sessionId);
-        closeMenu();
-        trigger.focus();
-    }
-
-    choices.forEach(function (choice) {
-        var option = document.createElement('button');
-        option.type = 'button';
-        option.className = 'followup-mode-option';
-        option.dataset.mode = choice.value;
-        option.setAttribute('role', 'option');
-        var optionCopy = document.createElement('span');
-        optionCopy.className = 'followup-mode-option-copy';
-        var optionName = document.createElement('span');
-        optionName.className = 'followup-mode-option-name';
-        optionName.textContent = choice.label;
-        var optionDescription = document.createElement('span');
-        optionDescription.className = 'followup-mode-option-description';
-        optionDescription.textContent = choice.description;
-        optionCopy.appendChild(optionName);
-        optionCopy.appendChild(optionDescription);
-        var selectedBadge = document.createElement('span');
-        selectedBadge.className = 'followup-mode-option-selected';
-        selectedBadge.textContent = '当前';
-        option.appendChild(optionCopy);
-        option.appendChild(selectedBadge);
-        option.addEventListener('click', function (event) {
-            event.preventDefault(); event.stopPropagation();
-            chooseMode(choice.value);
-        });
-        option.addEventListener('keydown', function (event) {
-            var index = optionRows.indexOf(option);
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                event.preventDefault(); event.stopPropagation();
-                var delta = event.key === 'ArrowDown' ? 1 : -1;
-                optionRows[(index + delta + optionRows.length) % optionRows.length].focus();
-            } else if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault(); event.stopPropagation();
-                chooseMode(choice.value);
-            } else if (event.key === 'Escape') {
-                event.preventDefault(); event.stopPropagation();
-                closeMenu(); trigger.focus();
-            }
-        });
-        optionRows.push(option);
-        menu.appendChild(option);
-    });
-
-    trigger.addEventListener('click', function (event) {
-        event.preventDefault(); event.stopPropagation();
-        if (menu.hidden) openMenu(false); else closeMenu();
-    });
-    trigger.addEventListener('keydown', function (event) {
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault(); event.stopPropagation();
-            openMenu(true);
-        } else if (event.key === 'Escape' && !menu.hidden) {
-            event.preventDefault(); event.stopPropagation(); closeMenu();
-        }
-    });
-    picker.appendChild(visualSelect);
-    picker.appendChild(direction);
-    picker.appendChild(trigger);
-    picker.appendChild(menu);
-    sync();
-    return picker;
 }
 
 function renderFollowupQueue(sessionId) {
@@ -2207,7 +2025,6 @@ function renderFollowupQueue(sessionId) {
         positionFollowupQueuePanel();
         return;
     }
-    closeActiveFollowupModePicker();
     panel.innerHTML = '';
     panel.dataset.sessionId = sid;
     panel.dataset.renderSignature = renderSignature;
@@ -2296,7 +2113,6 @@ function renderFollowupQueue(sessionId) {
             (typeof pendingHumanQuestions === 'function' && pendingHumanQuestions(sid).length)
             || (item.deferUntilRunEnd && (isSessionRunning(sid) || isServerStreamActive(sid)))
         );
-        var modePicker = createFollowupModePicker(item, sid);
         var undo = document.createElement('button');
         undo.type = 'button';
         undo.className = 'followup-queue-action followup-queue-undo';
@@ -2313,7 +2129,6 @@ function renderFollowupQueue(sessionId) {
         row.appendChild(grip);
         row.appendChild(text);
         row.appendChild(status);
-        row.appendChild(modePicker);
         row.appendChild(sendNow);
         row.appendChild(undo);
         panel.appendChild(row);

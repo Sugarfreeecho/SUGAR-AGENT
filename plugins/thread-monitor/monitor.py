@@ -133,6 +133,35 @@ def _read_os_threads():
     return psutil.Process(os.getpid()).threads()
 
 
+def _child_process_totals(errors: List[str]) -> Dict[str, Any]:
+    """汇总本进程派生出的子进程数与其 OS 线程数。
+
+    子进程（MCP 服务、插件隔离 worker、PTY shell）与宿主不共享地址空间，
+    ``_read_os_threads`` 只看得到本进程，因此单独给一个合计值；这里不展开
+    到单进程明细，面板上只多一行汇总。
+    """
+
+    empty: Dict[str, Any] = {"child_processes": None, "child_threads": None}
+    try:
+        import psutil
+
+        process = psutil.Process(os.getpid())
+        children = process.children(recursive=True)
+    except Exception as exc:
+        errors.append(f"child process probe failed: {exc}")
+        return empty
+    count = 0
+    threads = 0
+    for child in children:
+        try:
+            threads += int(child.num_threads())
+        except Exception:
+            # 枚举与取数之间子进程可能已退出；跳过它，不算采样错误。
+            continue
+        count += 1
+    return {"child_processes": count, "child_threads": threads}
+
+
 def _sampling_interval(elapsed: float) -> float:
     # Diagnostic sampling should use roughly <=5% of a worker's time. Back off
     # under load and avoid an immediate retry loop after a very slow sample.
@@ -542,6 +571,15 @@ class ThreadMonitor:
             info["rss_mb"] = round(float(process.memory_info().rss) / (1024 * 1024), 1)
         except Exception as exc:
             errors.append(f"process probe failed: {exc}")
+        info.update(_child_process_totals(errors))
+        host_threads = info.get("num_threads")
+        child_threads = info.get("child_threads")
+        # 两个数字都来自同一次采样；任一缺失就不给合计，避免用 0 冒充。
+        info["tree_threads"] = (
+            int(host_threads) + int(child_threads)
+            if isinstance(host_threads, int) and isinstance(child_threads, int)
+            else None
+        )
         info["monitor_uptime_seconds"] = round(_now() - self._started_at, 1)
         if self._last_error:
             info["last_error"] = self._last_error

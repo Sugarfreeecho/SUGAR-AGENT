@@ -137,7 +137,7 @@ def test_static_plugin_reads_reuse_catalog_but_recheck_enablement(monkeypatch, t
     enabled[0] = False
     with pytest.raises(gateway.PluginWebError): gateway._enabled_plugin('demo', refresh=False)
     gateway._enabled_plugin('demo')
-    assert forces[-1] is True, 'executable API lookup retains its fresh-catalog contract'
+    assert forces[-1] is True, 'an explicit refresh still rescans; the HTTP path reads the cached catalog'
 
 
 def test_runtime_metadata_does_not_deepcopy_conversation_arrays(tmp_path, monkeypatch):

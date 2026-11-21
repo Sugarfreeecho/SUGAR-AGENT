@@ -108,8 +108,18 @@ if __name__ == "__main__":
         )
 
         def runtime_run_is_locally_active(session_id: str, run_id: str) -> bool:
-            """Keep stale heartbeat records alive while their local task still exists."""
-            return is_run_active(session_id, run_id) or subagent_registry.is_running(session_id)
+            """Keep heartbeat records alive while any process still owns the run."""
+            if is_run_active(session_id, run_id) or subagent_registry.is_running(session_id):
+                return True
+            # A previous instance can still be executing a long tool, which
+            # produces no heartbeat. Only the owner may decide a run is stale;
+            # otherwise a second instance mutates rows it does not own.
+            try:
+                from webui import run_has_live_owner
+
+                return run_has_live_owner(session_id, run_id)
+            except Exception:
+                return False
 
         def runtime_run_has_foreign_owner(session_id: str, run_id: str) -> bool:
             from run_ownership import inspect_run_fence
@@ -219,6 +229,16 @@ if __name__ == "__main__":
         await _timed_step("auto_scheduler", start_auto_scheduler())
         try:
             await _timed_step("webui_lifecycle", start_webui_lifecycle())
+            try:
+                from webui import reconcile_orphaned_control_operations
+
+                await _timed_step(
+                    "control_operations", reconcile_orphaned_control_operations()
+                )
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Control operation reconciliation failed", exc_info=True
+                )
             yield
         finally:
             cpu_pressure.stop()

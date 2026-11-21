@@ -65,6 +65,19 @@ def test_display_persists_before_publish_and_returns_without_waiting_for_user(sh
     assert "_runtime_v2_committed" not in manager.get_ui_events_for_display("s1")[0]
 
 
+def test_presentation_lookup_survives_runtime_v2_only_history(show_context, monkeypatch):
+    """Runtime V2 sessions have no legacy ui_events.json to scan."""
+    context, manager, _, _, _ = show_context
+    projection = RuntimeUiProjection(manager.sessions_dir, manager._resolve_session_path)
+    monkeypatch.setattr(manager, "get_ui_events_for_display", lambda sid: [], raising=False)
+    monkeypatch.setattr(manager, "_load_ui_events_for_active_runtime",
+                        lambda sid: projection.read_ui_events(sid), raising=False)
+    result = asyncio.run(invoke_show_user(context, {"kind": "text", "title": "标题", "text": "正文"}))
+    assert result.kind == ToolOutcomeKind.COMPLETED
+    payload = json.loads(result.content)
+    assert saved_presentation(manager, "s1", payload["presentation_id"])["text"] == "正文"
+
+
 @pytest.mark.parametrize("arguments", [
     {"kind": "webpage", "url": "javascript:alert(1)"},
     {"kind": "webpage", "url": "https://user:password@example.test/"},

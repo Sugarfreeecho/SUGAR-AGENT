@@ -1675,14 +1675,16 @@ function updateSidebarRuntimeStatus(nextStatus) {
     if (!footer || !status) return;
     var state = nextStatus === false ? 'offline'
         : (nextStatus === true || !nextStatus ? deriveSidebarRuntimeStatus() : String(nextStatus));
-    if (['online', 'busy', 'waiting', 'alert', 'offline'].indexOf(state) < 0) state = 'online';
+    // 左下角 Runtime 状态只表达连通性：告警（服务端 alert）不再在这里变红，
+    // 会话级失败/中断仍由会话列表的红色标记呈现。
+    if (state === 'alert') state = 'online';
+    if (['online', 'busy', 'waiting', 'offline'].indexOf(state) < 0) state = 'online';
     footer.classList.remove('is-online', 'is-busy', 'is-waiting', 'is-alert', 'is-offline');
     footer.classList.add('is-' + state);
     var labels = {
         online: 'Runtime 在线',
         busy: 'Runtime 繁忙',
         waiting: 'Runtime 待处理',
-        alert: 'Runtime 告警',
         offline: 'Runtime 离线'
     };
     setUiRuntimeText(status, labels[state]);
