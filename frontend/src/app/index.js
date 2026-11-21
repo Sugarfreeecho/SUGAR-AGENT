@@ -64,6 +64,7 @@ import dockTabRegistrySource from './modules/dock/embedder/tab-registry.js?raw';
 import dockRightColumnSource from './modules/dock/embedder/right-column.js?raw';
 import dockPageHostSource from './modules/dock/embedder/page-host.js?raw';
 import dockBrowserPageSource from './modules/dock/embedder/browser-page.js?raw';
+import dockOfficePreviewSource from './modules/dock/embedder/office-preview.js?raw';
 
 globalThis.marked = marked;
 
@@ -231,6 +232,7 @@ const uiSources = [
     dockTabRegistrySource,
     dockPageHostSource,
     dockBrowserPageSource,
+    dockOfficePreviewSource,
     dockRightColumnSource,
 ];
 

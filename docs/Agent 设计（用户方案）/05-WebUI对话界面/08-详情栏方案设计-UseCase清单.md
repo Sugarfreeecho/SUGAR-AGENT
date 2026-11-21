@@ -1,8 +1,8 @@
 # 详情栏 · 功能方案设计（UseCase 清单）
 
-- 版本：2026-11 v22（聊天区最小宽度 560→372，详情栏可更宽）
+- 版本：2026-11 v23（文件内容页新增 PDF / Word / PowerPoint / Excel / CSV 内嵌预览）
 - 用途：逐条审查（四字段格式）。
-- 适用实现：`frontend/src/app/modules/dock/**`（engine 8 件 / renderer 5 件：icons、gesture、measure、dock-surface、float-layer / embedder 5 件：surface-store、tab-registry、right-column、page-host、browser-page）、`frontend/src/styles/dock.css`、`frontend/src/app/index.js`（`?raw` 登记）、后端 `GET /api/workspace-file-text`、测试 `frontend/tests/dock-engine.test.mjs`（24 项）、冒烟 `workspace/分屏功能需求/dock_verify/dock_smoke.py`（30 项）。
+- 适用实现：`frontend/src/app/modules/dock/**`（engine 8 件 / renderer 5 件：icons、gesture、measure、dock-surface、float-layer / embedder 6 件：surface-store、tab-registry、right-column、page-host、browser-page、office-preview）、`frontend/src/styles/dock.css`、`frontend/src/app/index.js`（`?raw` 登记）、后端 `GET /api/workspace-file-text`、`GET /api/workspace-doc-preview`、`GET /api/workspace-doc-media`（`app/workspace_doc_preview.py`）、测试 `frontend/tests/dock-engine.test.mjs`（24 项）、`tests/test_workspace_doc_preview.py`、`tests/test_details_office_preview_browser.py`、冒烟 `workspace/分屏功能需求/dock_verify/dock_smoke.py`（30 项）。
 - 上级：`00-WebUI对话界面整体设计.md`；技术细节与序列化格式见 [`../../frontend-dock.md`](../../frontend-dock.md)；诊断脚本 `dock_verify/turn_scope_probe.py`、`dock_verify/scope_probe_browser.py`。
 - 参照实现：dsh 新版 `packages/client/ui-dockkit`（引擎/组件/契约、`SplitGlyph`）、`ui-sidebar-right`（右栏产品化、`ExpandButton` 角落按钮、`PanelChrome` 条尾控件）、`ui-sidebar-files` / `ui-sidebar-documentpreview`（文件树与文件预览类型）。
 
@@ -42,9 +42,15 @@
 
 ### UC-5H10 详情栏 · 文件内容页与统一开文件策略
 - **触发**：在文件树点一个文件；`MyAgentDock.openDetailsFile(rel)` / `openResource('myagent-resource://file/…')` / **`openPathSmart(path)`**；或点击会话消息里的工作区文件链接（`a.msg-link-workspace-open`）。
-- **预期现象**：图片走 `/api/workspace-image` 内嵌；音频/视频走 `/api/workspace-media`（带播放控件）；**文本类后缀**（md/txt/log/csv/json/yaml/py/js/ts/html/css/sql/sh/ps1/c/cpp/java/go/rs…白名单）显示为等宽正文，超过 200 KB 截断并提示；**其它类型**（pdf/office/压缩包/可执行/图片/音视频/无扩展名等）显示"此文件需在系统应用中打开"卡片并可一键系统打开；工具栏始终提供系统打开入口。
-- **规则与边界**：会话文件链接与文件树点击**共用同一判定**（`MyAgentDock.isTextPath` / `openPathSmart`）：文本→详情栏，其余→系统应用；文本读取走**新增的最小只读接口** `GET /api/workspace-file-text?rel=&max_bytes=`（UTF-8、按上限截断并回传 `truncated`、路径经与媒体接口相同的允许根校验、绝不写文件）；读回内容替换字符占比 >2% 时自动降级为"系统打开"卡片（不再展示乱码）；⚠️ 该接口为后端路由，**需重启一次服务**才生效，生效前文本页显示"文本接口尚不可用"提示；内容区滚动位置同样按页签记忆。
+- **预期现象**：图片走 `/api/workspace-image` 内嵌；音频/视频走 `/api/workspace-media`（带播放控件）；**文本类后缀**（md/txt/log/csv/json/yaml/py/js/ts/html/css/sql/sh/ps1/c/cpp/java/go/rs…白名单）显示为等宽正文，超过 200 KB 截断并提示；PDF/Word/PowerPoint/Excel 走内嵌预览（见 UC-5H14）；**其它类型**（压缩包、可执行、字体、旧版 doc/xls/ppt、无扩展名等）显示"此文件需在系统应用中打开"卡片并可一键系统打开；工具栏始终提供系统打开入口。
+- **规则与边界**：会话文件链接与文件树点击**共用同一判定**（`MyAgentDock.isTextPath` / `isPreviewPath` / `openPathSmart`）：文本与 PDF/Office → 详情栏，其余→系统应用；文本读取走**新增的最小只读接口** `GET /api/workspace-file-text?rel=&max_bytes=`（UTF-8、按上限截断并回传 `truncated`、路径经与媒体接口相同的允许根校验、绝不写文件）；读回内容替换字符占比 >2% 时自动降级为"系统打开"卡片（不再展示乱码）；⚠️ 该接口为后端路由，**需重启一次服务**才生效，生效前文本页显示"文本接口尚不可用"提示；内容区滚动位置同样按页签记忆。
 - **依据**：`right-column.js`（`dockRightDocumentBody` / `dockRightLoadText` / `dockRightOpenPathSmart` / `dockRightIsTextPath` / `dockRightSystemCard`）、`session-scroll-history.js`（链接委托改走 `openPathSmart`）、`app/webui.py`（`workspace_file_text`）。
+
+### UC-5H14 详情栏 · PDF / Office / CSV 内嵌预览
+- **触发**：在文件树点开 `.pdf` / `.docx` / `.pptx` / `.xlsx` / `.xlsm` / `.csv` / `.tsv`；会话文件链接经 `openPathSmart`；`show_user` 的 `file` 展示（绝对路径）。
+- **预期现象**：PDF 用浏览器内置查看器铺满内容区（可缩放、选中文字、点链接）；Word 显示重排正文（标题、段落、列表、表格、内嵌图片、超链接）；PowerPoint 显示按栏宽等比缩放的幻灯片画布，顶部有上一页/下一页/页码下拉，键盘 ←/→/PgUp/PgDn/Home/End 可翻页；Excel 显示工作表页签、冻结行列吸顶、合并单元格、字体/填充/换行/日期/百分比；CSV/TSV 显示为首行吸顶的表格（自动识别 `, ; TAB |` 分隔符），工具条显示 `CSV · 行 × 列 · 编码` 并可一键切"查看源码 / 预览表格"；页脚标注"简化还原"与超限提示；头带仍保留打开目录、在系统应用中打开、刷新。
+- **规则与边界**：解析全部只读。PDF 由 `GET /api/workspace-assets/<rel>` 以 `application/pdf; inline` 返回，不引入 PDF 引擎；Office/CSV 由 `GET /api/workspace-doc-preview?rel=` 返回 `{kind, document|deck|workbook|table, notes, truncated}`，图片按 `word/media`/`ppt/media`/`xl/media` 逐件走 `GET /api/workspace-doc-media?rel=&part=`（非图片部件一律 400）。限额：原件 60 MB、解压总量 240 MB、单 XML 24 MB、单图 12 MB、Word 6000 块、幻灯片 60 页、表格 24 表 × 400 行 × 64 列（全局 3 万单元格）、CSV 20 MB / 500 行 / 60 列；CSV 编码按 BOM → UTF-8 → GB18030 回退，超限降级为页脚说明而不是空白。PPT 占位符的几何/字号从 layout → master → `txStyles` 继承；母版装饰、动画、切换、图表/SmartArt 内部结构不绘制（图表显示占位框）。旧版 `.doc/.xls/.ppt` 与压缩包、可执行文件仍走"系统打开"卡片。每条 open 地址对应一个 `document` 页签，切换文件复用同一页签。
+- **依据**：`frontend/src/app/modules/dock/embedder/office-preview.js`（`dockRightRenderPdfPreview` / `dockRightRenderOfficePreview` / `dockRightRenderDeck` / `dockRightRenderWorkbook` / `dockRightRenderCsv`）、`right-column.js`（`dockRightPreviewKind` / `dockRightOpenPathSmart` / `dockRightDocumentBody`）、`app/workspace_doc_preview.py`（`build_preview` / `_build_csv` / `read_preview_media`）、`app/webui.py`（`workspace_doc_preview` / `workspace_doc_media`）、`styles/dock.css`（`.dock-doc-richtext` / `.dock-deck` / `.dock-workbook` / `.dock-csv`）、`tests/test_workspace_doc_preview.py`、`tests/test_details_office_preview_browser.py`。
 
 ### UC-5H11 详情栏 · 修改历史页
 - **触发**：`MyAgentDock.openDetailsTab('changes')`；开始页卡片；或点击 Change Review 插件的「查看」按钮（被捕获后改为打开本页）。
@@ -60,7 +66,7 @@
 
 ### UC-5H13 dockkit 扩展点（插件 / 脚本可用）
 - **触发**：插件或页面脚本调用 `MyAgentDock` 公开 API。
-- **预期现象**：`registerTabType({id, kind, patterns, priority, canOpen, title, body})` 注册新内容类型；`openResource(address)` 按 `extension > builtin > fallback` → 模式长度 → 注册顺序解析并落座；`openDetails()` / `toggleDetails()` / `closeDetails()` / `openDetailsTab(kind)` / `openDetailsFile(rel)` / **`openPathSmart(path)`** / **`isTextPath(path)`** / `detailsState()` 操作详情栏；`openSession(sessionId)` 切会话（其详情栏状态随动）；`sessionId()` 读当前会话；`myagent:dock-ready` 在就绪后派发。
+- **预期现象**：`registerTabType({id, kind, patterns, priority, canOpen, title, body})` 注册新内容类型；`openResource(address)` 按 `extension > builtin > fallback` → 模式长度 → 注册顺序解析并落座；`openDetails()` / `toggleDetails()` / `closeDetails()` / `openDetailsTab(kind)` / `openDetailsFile(rel)` / **`openPathSmart(path)`** / **`isTextPath(path)`** / **`isPreviewPath(path)`**（PDF/Office 内嵌预览）/ `detailsState()` 操作详情栏；`openSession(sessionId)` 切会话（其详情栏状态随动）；`sessionId()` 读当前会话；`myagent:dock-ready` 在就绪后派发。
 - **规则与边界**：页面类型按 kind 打开且**每面板唯一**（同 kind 再开会聚焦而非重复）；资源类型 `canOpen` 一票否决；详情栏内置类型 id 为 `myagent.details.guide` / `.files` / `.document` / `.changes`。
 - **依据**：`dock/embedder/tab-registry.js`（`DockTabRegistry` / `dockCompileGlob` / `dockPageAddress`）、`right-column.js` 末尾的 `MyAgentDock` 装配与事件派发。
 
@@ -69,7 +75,8 @@
 - **不做**：主内容区的会话分屏（v2 已整体移除）；移动端专门适配（仅窄屏全屏策略）；分屏布局持久化（默认 memory-only，可后续按技术文档接入）；撤销/重做按钮 UI（引擎历史保留，当前无入口）。
 - **"本轮"的口径**：指**最近一条用户消息之后**的改动（含正在进行的这一轮）；若需要"最近一次改动批次 / 最近一次工具调用组"为界，作为后续增强项，需另行确认口径。
 - **改动审查的数据归属**：本页是"会话改动的只读聚合 + 撤销入口"；改动的捕获、统计与安全撤销语义属 06-能力扩展加载的 Change Review 插件，不在本篇。
-- **文件访问安全**：四个页共用既有允许根校验；文本接口只读、限长。
+- **文件访问安全**：各页共用既有允许根校验；文本接口只读、限长；Office 预览只读、限额，且
+  `/api/workspace-doc-media` 只允许包内 `word/media`、`ppt/media`、`xl/media` 下的常见位图部件。
 
 ## 4. 依据映射
 
@@ -77,11 +84,13 @@
 |---|---|
 | UC-5H7–5H12 | `frontend/src/app/modules/dock/**`、`styles/dock.css` |
 | UC-5H10 文本接口 / 统一策略 | `app/webui.py::workspace_file_text`、`right-column.js`（`openPathSmart` / `isTextPath`）、`session-scroll-history.js` |
+| UC-5H14 PDF / Office 预览 | `app/workspace_doc_preview.py`、`webui.py::workspace_doc_preview` / `workspace_doc_media`、`embedder/office-preview.js`、`styles/dock.css`、`tests/test_details_office_preview_browser.py` |
 | UC-5H11 撤销/恢复 | `plugins/change-review/{web/change-review.js,host.py}`（`change-reviews/undo\|restore`、「查看」捕获） |
 | 验证 | `frontend/tests/dock-engine.test.mjs`（24 项）、`workspace/分屏功能需求/dock_verify/dock_smoke.py`（30 项：角落按钮（含计算样式隐藏）/ 推挤 / 开始页 / 文件树与分类图标 / 分栏与上限隐藏 / 孤零开始页收栏 / 拖宽 / 文件内容 / 文本链接 / 滚动记忆 / 修改历史双档与"新用户轮次重置" / 撤销按钮 / 会话随动 / 收起与重开 / 无页面错误） |
 
 ## 5. 版本记录
 
+- 2026-11-18 v23：**文件内容页支持 PDF / Word / PowerPoint / Excel / CSV 内嵌预览**——PDF 交给浏览器内置查看器；Office 由新增 `app/workspace_doc_preview.py` 解析为转义 HTML（Word 重排正文、PPT 960px 逻辑画布并按栏宽缩放、Excel 表页签 + 冻结行列），CSV/TSV 自动识别编码与分隔符后按表格显示并可切源码，图片逐件经 `/api/workspace-doc-media` 取回；新增 UC-5H14，`openPathSmart` 把这些后缀也导向详情栏，压缩包/可执行/旧版 Office 仍是"系统打开"卡片。后端 8 项测试、前端 5 项浏览器测试通过；需重启服务加载新路由。
 - 2026-10-22 v21：开始页固定为文件、修改历史、浏览器、插件四类入口；插件页面集中到 `plugins` 类型页中选择。浏览器采用 DSH 的紧凑工具栏、地址输入框和 regular SVG 图标，浮动标题同步显示地球图标。
 - 2026-10-07 v18：同步 15《展开/收起统一过渡动效》——详情栏自身开合统一为 280ms 面板时长，文件树目录复用 220ms 内容折叠时长，缓动一致并遵循减少动态效果偏好。
 - 2026-09-27 v17：**窄屏旧兜底移除**——删除 `@media (max-width: 767px) { .dock-rightbar { width: 100% !important; } }`：窄屏全屏由 v16 的模式系统统一接管（<768px 自动进入 `fullscreen` 模式，`.is-fullscreen > .dock-surface` 自身 100% 宽），旧 `!important` 规则会与模式化宽度冲突。

@@ -147,7 +147,23 @@ function dockRightLabels() {
         taskRunningReview: '任务和子任务全部结束后才可撤销或恢复',
         unsupported: '此文件类型暂不支持内嵌预览，可在系统应用中打开。',
         textUnavailable: '文本接口尚不可用（需重启服务加载新接口），可在系统应用中打开。',
+        previewUnavailable: '预览接口尚不可用（需重启服务加载新接口），可在系统应用中打开。',
         truncated: '文本过长，仅显示前 200 KB。',
+        previewApprox: '内嵌预览为简化还原，版式与字体可能与原文件略有差异。',
+        previewTable: '预览表格',
+        documentTruncated: '文档内容过长，仅显示前面部分。',
+        slidesTruncated: '幻灯片过多，仅显示前 60 页。',
+        rowsTruncated: '表格较大，仅显示部分行列。',
+        columnsTruncated: '表格列过多，仅显示前 60 列。',
+        sheetsTruncated: '工作表过多，仅显示前 24 个。',
+        mediaSkipped: '部分图片过大，未嵌入预览。',
+        emptyDocument: '文档没有可显示的内容。',
+        pdfPreview: 'PDF 预览',
+        previousSlide: '上一页',
+        nextSlide: '下一页',
+        jumpSlide: '跳转到指定页',
+        slidePreview: '幻灯片预览',
+        hiddenSheet: '隐藏工作表',
         undo: '撤销',
         restore: '恢复',
         undone: '已撤销',
@@ -280,6 +296,12 @@ function dockRightFileIcon(name) {
           body: '<path d="M6 4.2L3.2 8l2.8 3.8M10 4.2L12.8 8 10 11.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>' },
         { test: ['json', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'lock'], color: '#e5c07b',
           body: '<path d="M6.4 3.4C4.9 3.4 5 5.4 5 6.6c0 1-1 1.2-1.4 1.4.4.2 1.4.4 1.4 1.4 0 1.2-.1 3.2 1.4 3.2M9.6 3.4c1.5 0 1.4 2 1.4 3.2 0 1 1 1.2 1.4 1.4-.4.2-1.4.4-1.4 1.4 0 1.2.1 3.2-1.4 3.2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' },
+        { test: ['doc', 'docx', 'rtf', 'odt'], color: '#4f86e8',
+          body: '<rect x="2.8" y="2.6" width="10.4" height="10.8" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.2 5.6h5.6M5.2 8h5.6M5.2 10.4h3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>' },
+        { test: ['xls', 'xlsx', 'xlsm', 'ods'], color: '#3aa675',
+          body: '<rect x="2.8" y="2.8" width="10.4" height="10.4" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.8 6.4h10.4M2.8 9.8h10.4M6.4 2.8v10.4" stroke="currentColor" stroke-width="1.15"/>' },
+        { test: ['ppt', 'pptx', 'odp'], color: '#e0854a',
+          body: '<rect x="2.4" y="3.4" width="11.2" height="8" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6.6 5.9l3.6 1.9-3.6 1.9z" fill="currentColor"/>' },
         { test: ['md', 'markdown', 'txt', 'rst', 'log', 'csv', 'tsv'], color: '#98c379',
           body: '<rect x="2.5" y="3" width="11" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 6.2h6M5 8.4h6M5 10.6h3.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>' },
         { test: ['pdf'], color: '#e06c75',
@@ -328,14 +350,15 @@ function dockRightIsTextPath(path) {
 }
 
 /**
- * The shared "open a file" policy for the app: text opens in the details
- * column, everything else goes to the system app — the same rule the tree's
- * click follows. Session file links call this through `MyAgentDock`.
+ * The shared "open a file" policy for the app: text and previewable documents
+ * (PDF / Word / PowerPoint / Excel) open in the details column, everything
+ * else goes to the system app — the same rule the tree's click follows.
+ * Session file links call this through `MyAgentDock`.
  */
 function dockRightOpenPathSmart(pathValue) {
     const rel = String(pathValue || '');
     if (!rel) return;
-    if (dockRightIsTextPath(rel)) {
+    if (dockRightIsTextPath(rel) || dockRightCanPreviewPath(rel)) {
         dockRightOpenResource(DOCK_RIGHT_FILE_PREFIX + encodeURIComponent(rel));
         return;
     }
@@ -1221,7 +1244,7 @@ function dockRightOpenResource(address) {
 
 // ── document page ────────────────────────────────────────────────────────────
 
-/** One file's content: image, media, or text, with an open-in-system fallback. */
+/** One file's content: image, media, text, PDF or an office preview. */
 function dockRightDocumentBody(tab) {
     const el = document.createElement('div');
     el.className = 'dock-doc';
@@ -1286,6 +1309,10 @@ function dockRightDocumentBody(tab) {
     content.className = 'dock-doc-content';
     el.appendChild(head);
     el.appendChild(content);
+    // Preview branches manage their own padding; every other branch keeps the
+    // page's default gutter (a tab re-used after a slide deck would otherwise
+    // keep the deck's edge-to-edge padding).
+    content.style.padding = '';
 
     if (DOCK_RIGHT_IMAGE_SUFFIXES.indexOf(suffix) >= 0) {
         const image = document.createElement('img');
@@ -1308,6 +1335,14 @@ function dockRightDocumentBody(tab) {
         refresh.addEventListener('click', () => {
             try { media.load(); } catch (error) { /* ignore */ }
         });
+    } else if (dockRightPreviewKind(rel) === 'pdf') {
+        // The browser's own viewer keeps PDF text, links and zoom; the asset
+        // route serves the file inline, so no PDF engine ships with the app.
+        dockRightRenderPdfPreview(content, state, refresh);
+    } else if (dockRightPreviewKind(rel)) {
+        // Word / PowerPoint / Excel: the backend parses the package into
+        // escaped HTML and layout data, images arrive part by part.
+        dockRightRenderOfficePreview(content, state, refresh);
     } else if (DOCK_RIGHT_BINARY_SUFFIXES.indexOf(suffix) >= 0) {
         // Feedback #5: a non-text file goes straight to the system-app card
         // instead of showing mojibake.
@@ -2265,6 +2300,8 @@ function dockRightInit() {
             openPathSmart: (pathValue) => dockRightOpenPathSmart(String(pathValue || '')),
             /** Whether a path would open inline (text) rather than through the system app. */
             isTextPath: (pathValue) => dockRightIsTextPath(String(pathValue || '')),
+            /** Whether a path has an inline PDF / office preview. */
+            isPreviewPath: (pathValue) => dockRightCanPreviewPath(String(pathValue || '')),
             /** The surface key a session resolves to (a subagent maps to its parent). */
             surfaceKey: (sessionId) => dockRightSurfaceKey(String(sessionId || '')),
             /** The details column's state, for tests and plugins. */

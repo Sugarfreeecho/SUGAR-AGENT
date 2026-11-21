@@ -80,8 +80,9 @@
 | 通知与 UI 存在性（10 秒 presence 上报驱动桌面提醒；节能/睡眠时为辅助信号） | `message-rendering.js::registerUiPresence`、后端 `ui_presence/_ui_presence_has_active` | 【卡】 |
 | 已开页面复用（仅浏览器进程；按 `General Agent` / `SugarAgent` 关键词匹配当前或后台标签；不逐标签核对地址） | `tray_launcher._visible_browser_windows/_visible_webui_windows/_select_webui_browser_tab/_focus_existing_webui_tab` | 【单】 |
 | 启动与激活韧性（托盘唯一首开、1.5 秒并发抑制、2.5 秒激活超时+一次重试、不可见则真实打开） | `tray_launcher.run_starter/_auto_open_webui_when_ready/_request_webui_activation_with_retry` | 【单】 |
-| 右侧详情栏（dockkit 三层：引擎/渲染/嵌入；dsh 式第三列 + 开始/文件/内容/修改历史四类页；角落按钮与条尾控件图形同 dsh 源码） | `frontend/src/app/modules/dock/**`（engine 8 / renderer 5 / embedder 3）、`styles/dock.css`、`app/index.js` 登记 | 【单】 |
-| 统一开文件策略（文本→详情栏，其余→系统应用；`MyAgentDock.openPathSmart` / `isTextPath`，会话文件链接与文件树共用） | `modules/dock/embedder/right-column.js`、`modules/session-scroll-history.js`（链接委托） | 【单】 |
+| 右侧详情栏（dockkit 三层：引擎/渲染/嵌入；dsh 式第三列 + 开始/文件/内容/修改历史四类页；角落按钮与条尾控件图形同 dsh 源码） | `frontend/src/app/modules/dock/**`（engine 8 / renderer 5 / embedder 6）、`styles/dock.css`、`app/index.js` 登记 | 【单】 |
+| 统一开文件策略（文本与 PDF/Word/PowerPoint/Excel/CSV → 详情栏，其余 → 系统应用；`MyAgentDock.openPathSmart` / `isTextPath` / `isPreviewPath`，会话文件链接与文件树共用） | `modules/dock/embedder/right-column.js`、`modules/session-scroll-history.js`（链接委托） | 【单】 |
+| 详情栏文件内容页内嵌预览：PDF 走浏览器查看器；Word 重排正文、PPT 缩放画布（layout/master 几何继承）、Excel 表页签 + 冻结行列、CSV/TSV 自动识别分隔符与编码并可切源码；图片逐件取回；超限页脚说明 | `modules/dock/embedder/office-preview.js`、`app/workspace_doc_preview.py`、`webui.py` 两条新路由、`styles/dock.css` | 【单】 |
 | 修改历史双档（本轮/本次会话，默认本轮；边界随用户消息即时推进；扫描带超时/重试/看门狗；撤销/恢复走 Change Review 路由） | `modules/dock/embedder/right-column.js`、`plugins/change-review/host.py` | 【单】 |
 | Goal 状态徽章与 run activity 解耦：active 显示普通 badge，不用黄闪冒充“正在运行” | `plugins/agent-goal/.myagent-plugin/plugin.json`、插件 UI 渲染 | 【单】 |
 
@@ -108,6 +109,7 @@
 | Runtime V2：state / events / runs / stream / subagents | 事件与快照读取、游标、SSE | 【图】 |
 | 工作区：文件列表、目录浏览、图片元数据、媒体响应、打开文件 | 含路径越界防护 `_resolve_allowed_local_path` | 【单】 |
 | 工作区：文本只读接口（`GET /api/workspace-file-text`，UTF-8 截断 + `truncated` 标记，供详情栏文件内容页） | `webui.py::workspace_file_text`；需重启服务生效 | 【单】 |
+| 工作区：Office 预览（`GET /api/workspace-doc-preview` 解析 docx/pptx/xlsx；`GET /api/workspace-doc-media` 按部件取图片） | `webui.py`、`workspace_doc_preview.py`；只读 + 限额；需重启服务生效 | 【单】 |
 | 附件：授权读取、queue pin、grant、URL 入库、ZIP 导入/导出 | `webui.py`、`attachments/api.py` | 【单】 |
 | 独立识图：创建/查询/SSE 续接/取消/清理/GC/指标 | `vision_api.py` 的 `/api/vision/*` 路由 | 【单】 |
 | 运行恢复：interrupted ReAct 会话自动恢复、human interaction 恢复；跨进程 exact-run 租约新鲜时禁止误写 `no_local_activity` 与重复恢复 | 后台 runner（`start_react_recovery_runner`）、`_runtime_observability_active_runs_are_recent` | 【单】 |
@@ -155,6 +157,7 @@
 
 - 2026-09-28（v21）：子代理执行活跃性——运行中子代理视为活跃子会话（忙碌/状态/运行守卫、子会话流唤醒）；子会话 steer 顺序消费（append、不换聊天管线）；`subagent_created` 先注册 pending；目录刷新节流（见 05/04·UC-5D17/5D18）。
 - 2026-09-28（v20）：平滑跟随改为**固定刚度软弹簧**（`followStiffness: 180`、临界阻尼、无到期期限；`followResponseBase/PerLagPx/followDeadlineMs` 删除）——对齐 DeepSeek 手机端观感；单帧 ≤20px 保留为大位移安全阀；文本揭示层与跟随解耦不变（见 05/02·UC-5B1）。
+- 2026-11-18（v20）：详情栏文件内容页新增 **PDF / Word / PowerPoint / Excel / CSV 内嵌预览**——PDF 走浏览器查看器，Office/CSV 由 `app/workspace_doc_preview.py` 解析为转义 HTML（PPT 继承 layout/master 几何并按栏宽缩放，Excel 表页签 + 冻结行列，CSV/TSV 自动识别编码/分隔符并可切源码），图片经 `/api/workspace-doc-media` 逐件取回；`openPathSmart` 把这些后缀并入详情栏；说明见 05/08·UC-5H14。
 - 2026-09-28（v19）：平滑跟随同步为**临界阻尼弹簧**模型（速度连续、响应 = 26 + 0.5×落后距离、230ms 期限、单帧 ≤20px、无收尾拖尾）；文本揭示层保留且与跟随解耦（见 05/02·UC-5B1）。
 - 2026-09-28（v18）：平滑跟随改为**统一限时滑动**——折行与整行高度变化共用同一规则（160ms 段时长、单帧 ≤20px、easeOutCubic）；移除速度地板、通道差异与揭示速率反馈；内容停顿后 ≤250ms 收尾、无拖尾（见 05/02·UC-5B1）。
 - 2026-09-21（v17）：右侧历史记录面板保持原有独立样式（不纳入共享视觉系统）——恢复自有面板/标题/列表样式与标签式文案，移除“n 条记录”统计行与共享条目类；能力行同步收窄为 Todo/Goal/声明式插件。

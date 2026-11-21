@@ -99,7 +99,7 @@ WebUI 按 dsh 的三段式布局：最左会话列表、中间会话、右侧一
 |---|---|---|
 | 开始（guide） | 无 | 栏的首页与兜底页：关闭栏内最后一个页签时由 settle 重新播种它（栏不会随之收起）；`+` = 在该面板新建一个开始页（"空窗口"）；四个引导卡进入文件树/修改历史/浏览器/插件 |
 | 工作区文件 | `GET /api/workspace-files?dir=` | 逐层展开的树；目录优先、显示大小、可刷新；点文件打开文件内容页 |
-| 文件内容 | 图片 `/api/workspace-image`；音视频 `/api/workspace-media`；文本 `GET /api/workspace-file-text`（新增） | 文本 UTF-8、按 200 KB 截断并提示；二进制提示"在系统应用中打开"；工具栏常备系统打开入口 |
+| 文件内容 | 图片 `/api/workspace-image`；音视频 `/api/workspace-media`；文本 `GET /api/workspace-file-text`；PDF `/api/workspace-assets/<rel>`；Office/CSV `GET /api/workspace-doc-preview` + `GET /api/workspace-doc-media`（2026-11 新增） | 文本 UTF-8、按 200 KB 截断并提示；PDF 走浏览器内置查看器；Word 显示重排正文、PowerPoint 显示可翻页幻灯片画布、Excel 显示工作表页签与表格、CSV/TSV 显示首行吸顶表格并可切源码；压缩包/可执行等仍提示"在系统应用中打开"；工具栏常备系统打开入口 |
 | 修改历史 | 会话历史中的 `ui.changes`（`/sessions/{id}/history_snapshot`） | 按路径取最新 revision；± 着色 diff 可展开；撤销/恢复走 `change-reviews/undo\|restore`（工作区运行中时服务端 409）；监听 `myagent:ui-event` 实时追加 |
 | 插件（plugins） | 已校验的 UI 页面贡献 | 独立目录页，按顺序列出可用页面；内嵌设置项不列入；启停时更新，空列表显示空态 |
 | 插件页面（plugin-page） | 插件声明的 `web.entry` | 从目录或其他业务入口打开，按页面和绑定会话去重，iframe 保活 |
@@ -108,8 +108,16 @@ WebUI 按 dsh 的三段式布局：最左会话列表、中间会话、右侧一
 补充（2026-09-14 第二轮反馈）：
 
 - **文件树分类图标**：按扩展名给色的 SVG（图片/代码/配置/文档/PDF/文件夹/通用文件）；
-- **非文本兜底**：先按后缀（pdf/doc/xls/zip/exe…）直接给"系统打开"卡片；文本接口读回后
+- **非文本兜底**：先按后缀（zip/exe/font/legacy doc/xls/ppt…）直接给"系统打开"卡片；文本接口读回后
   若替换字符占比 >2% 也自动切到该卡片，不再显示乱码；
+- **Office / PDF / CSV 内嵌预览**（2026-11）：`.pdf` 交给浏览器内置查看器（`/api/workspace-assets` 以
+  `application/pdf` inline 返回）；`.docx`/`.pptx`/`.xlsx`/`.xlsm` 由后端 `workspace_doc_preview`
+  解析成转义后的 HTML：Word 输出标题/段落/列表/表格/内嵌图片，PowerPoint 输出 960px 逻辑画布
+  （占位符几何与字号从 layout/master 继承，按栏宽缩放），Excel 输出每表一张表 + 冻结行列。
+  `.csv`/`.tsv` 按 BOM → UTF-8 → GB18030 解码、自动识别 `, ; TAB |` 分隔符，输出首行吸顶的表格，
+  工具条可切"查看源码 / 预览表格"（源码走既有 `/api/workspace-file-text`）。
+  内嵌图片按包内 `word/media`、`ppt/media`、`xl/media` 逐件经 `/api/workspace-doc-media` 取回，
+  不内联进 JSON；解析全部只读，限额为 60 MB 原件、60 页幻灯片、400 行 × 64 列 × 24 表，超限在页脚说明；
 - **滚动记忆**：树、文件内容、修改历史各自的滚动位置按页签记录，被换出后重新挂回时恢复
   （浏览器会丢掉脱离文档的 scroller 位置，由 `__dockRestore` 钩子补回）；
 - **分栏**：第二个面板以"开始"页落座（不再复制同一窗口）；两面板后分栏控件隐藏（死按钮不再出现）；
@@ -119,16 +127,18 @@ WebUI 按 dsh 的三段式布局：最左会话列表、中间会话、右侧一
   卡片：整行 +/- 底色、文件头、状态行）；只剩一个"开始"页时关闭它=收起详情栏；胶囊在浅色主题
   加底色与描边（此前近乎透明）。
 - **统一开文件策略**：会话里的工作区文件链接（`a.msg-link-workspace-open`）改经
-  `MyAgentDock.openPathSmart`：**文本后缀**（md/py/json/…，排除二进制与图片/音视频）在详情栏打开；
-  其余一律交系统应用——与文件树点击同一套判定（`MyAgentDock.isTextPath` 可单独查询）。
+  `MyAgentDock.openPathSmart`：**文本后缀**（md/py/json/…，排除二进制与图片/音视频）与
+  **PDF/Word/PowerPoint/Excel** 在详情栏打开；其余一律交系统应用——与文件树点击同一套判定
+  （`MyAgentDock.isTextPath` / `isPreviewPath` 可单独查询）。
 - **修改历史**：页头两档"本轮 / 本次会话"（默认本轮，边界=最近一条用户消息，且**随新的用户消息即时推进**）；
   扫描带 20s 超时、失败静默重试 ×2、2s 看门狗，首次打开与会话切换并发时不会留下空页（诊断脚本
   `dock_verify/turn_scope_probe.py`、`dock_verify/scope_probe_browser.py`）。
 - **改动审查「查看」已回退为插件原生浮窗**：详情栏不再捕获该按钮（先前"按批次对齐"的实验已整体删除）；
   修改历史页仍是独立的会话级视图（本轮/本次会话双档）。
 
-> ⚠️ `/api/workspace-file-text` 是后端路由，**需重启一次服务**才生效；在此之前文本页
-> 显示"文本接口尚不可用（可在系统应用中打开）"，其余功能不受影响。
+> ⚠️ `/api/workspace-file-text`、`/api/workspace-doc-preview`、`/api/workspace-doc-media` 都是后端
+> 路由，**需重启一次服务**才生效；在此之前文本页显示"文本接口尚不可用（可在系统应用中打开）"，
+> Office 页显示"预览接口尚不可用（可在系统应用中打开）"，其余功能不受影响。
 
 ## 5. 交互与手势（照抄 dsh 的缺陷修复）
 

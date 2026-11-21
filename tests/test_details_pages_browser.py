@@ -64,6 +64,20 @@ def details_page(browser_page, request):
       var sessionStore={setCurrentSession(id){this.currentSessionId=id}};
       window.MyAgentIcons={svg:()=>'<svg></svg>'};
       function getActiveWorkDir(){return 'D:/fixture'}
+      function getWorkspaceRequestContext(){return {session_id:'s1'}}
+      function workspaceApiUrl(endpoint, params, context){
+        const query=new URLSearchParams(Object.assign({}, context||getWorkspaceRequestContext(), params||{}));
+        return endpoint+(query.toString()?'?'+query:'');
+      }
+      function workspaceAbsolutePath(path){
+        const raw=String(path||'').replace(/\\\\/g,'/');
+        return /^[A-Za-z]:\\//.test(raw)?raw:'D:/fixture/'+raw.replace(/^\\/+/, '');
+      }
+      function workspaceAssetUrl(path){
+        return '/api/sessions/s1/workspace-assets/'+workspaceAbsolutePath(path).split('/').map(encodeURIComponent).join('/');
+      }
+      function openWorkspaceLocalPath(){return Promise.resolve({ok:true})}
+      function showOpenFileFeedback(){}
       async function switchSession(id){
         setCurrentSessionState(id);
         if(window.switchGates?.[id])await window.switchGates[id];
@@ -77,7 +91,7 @@ def details_page(browser_page, request):
     for folder, names in [
         ('engine', ['types', 'tree', 'constraints', 'geometry', 'operations', 'planner', 'sequence', 'controller']),
         ('renderer', ['icons', 'gesture', 'measure', 'dock-surface', 'float-layer']),
-        ('embedder', ['surface-store', 'tab-registry', 'page-host', 'browser-page', 'right-column']),
+        ('embedder', ['surface-store', 'tab-registry', 'page-host', 'browser-page', 'office-preview', 'right-column']),
     ]:
         for name in names:
             source += '\n' + (MODULES / folder / (name + '.js')).read_text(encoding='utf-8')
