@@ -1,0 +1,15 @@
+{
+  "name": "sugar-assistant-sidecar",
+  "private": true,
+  "type": "module",
+  "description": "小Sugar助手的 Node sidecar：微信直接引用 vendor/wechat-core，QQ 需要官方 SDK",
+  "scripts": {
+    "wechat:login": "node wechat-login.mjs",
+    "wechat": "node wechat.mjs",
+    "qq": "node qq.mjs"
+  },
+  "dependencies": {
+    "@tencent-connect/qqbot-nodejs": "^1.0.4",
+    "qrcode": "^1.5.4"
+  }
+}

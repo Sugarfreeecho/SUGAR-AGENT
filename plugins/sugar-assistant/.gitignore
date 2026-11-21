@@ -1,0 +1,8 @@
+# 微信登录态（含 token）：绝不入库
+state/
+# Node 依赖与构建产物
+sidecar/node_modules/
+sidecar/package-lock.json
+vendor/*/node_modules/
+__pycache__/
+*.pyc

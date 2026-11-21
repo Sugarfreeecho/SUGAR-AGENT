@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "sugar-assistant",
+  "name": "小Sugar助手",
+  "version": "0.2.0",
+  "description": "统一 IM 接入：一套 Core 管会话映射、幂等投递、身份分级与提问/审批，各家只写一个薄 Adapter。",
+  "author": { "name": "SugarAgent" },
+  "capabilities": {
+    "trusted_host": { "entry": "host.py" },
+    "web": { "entry": "web/index.html", "assets": "web" },
+    "ui": {
+      "details.tab": [
+        { "id": "console", "title": "小Sugar控制台", "scope": "app", "order": 55 }
+      ]
+    }
+  },
+  "permissions": { "context": [], "services": ["browser"] }
+}

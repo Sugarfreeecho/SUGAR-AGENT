@@ -1,0 +1,36 @@
+{
+  "enabled": true,
+  "session_scope": "chat",
+  "channels": {
+    "feishu": {
+      "enabled": false,
+      "account": "default",
+      "quota": "rate",
+      "allow": [],
+      "allow_groups": [],
+      "group_members": {}
+    },
+    "qq": {
+      "enabled": false,
+      "account": "default",
+      "quota": "rate",
+      "allow": [],
+      "allow_groups": [],
+      "group_members": {}
+    },
+    "wechat": {
+      "enabled": false,
+      "account": "default",
+      "quota": "window10",
+      "allow": [],
+      "allow_groups": [],
+      "group_members": {}
+    }
+  },
+  "principals": {},
+  "delivery": {
+    "max_attempts": 3,
+    "backoff": [0.5, 2.0, 8.0],
+    "readback": true
+  }
+}

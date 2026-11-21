@@ -1,0 +1,3 @@
+# 小Sugar助手 · Python 依赖
+# 只有飞书通道需要它；微信/QQ 走 Node sidecar（见 sidecar/package.json）
+lark-oapi>=1.4.0

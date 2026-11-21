@@ -1,0 +1,54 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小Sugar控制台</title>
+<link rel="stylesheet" href="/plugin-assets/sugar-assistant/console.css?v=13">
+</head>
+<body>
+<div class="shell">
+  <header class="top">
+    <div class="brand">
+      <span class="dot" id="healthDot" aria-hidden="true"></span>
+      <div>
+        <h1>小Sugar助手</h1>
+        <p class="sub" id="subline">正在读取状态…</p>
+      </div>
+    </div>
+    <button class="icon" id="refresh" title="刷新">↻</button>
+  </header>
+
+  <nav class="tabs" id="tabs" role="tablist">
+    <button role="tab" data-tab="overview" class="on">概览</button>
+    <button role="tab" data-tab="chats">对话</button>
+    <button role="tab" data-tab="persona">人设</button>
+    <button role="tab" data-tab="people">人物</button>
+    <button role="tab" data-tab="config">配置</button>
+    <button role="tab" data-tab="logs">日志</button>
+  </nav>
+
+  <main>
+    <section id="pane-overview" class="pane on"></section>
+    <section id="pane-chats" class="pane"></section>
+    <section id="pane-persona" class="pane"></section>
+    <section id="pane-people" class="pane"></section>
+    <section id="pane-config" class="pane"></section>
+    <section id="pane-logs" class="pane"></section>
+  </main>
+</div>
+<script src="/plugin-assets/sugar-assistant/console.js?v=13"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+

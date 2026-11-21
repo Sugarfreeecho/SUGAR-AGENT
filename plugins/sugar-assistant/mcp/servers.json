@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "sugar-assistant": {
+      "command": "python",
+      "args": ["-u", "mcp/server.py"],
+      "cwd": ".",
+      "tool_timeout": 120,
+      "default_tool_effect": "read",
+      "env_allowlist": ["SYSTEMDRIVE", "SYSTEMROOT", "OS", "PATH", "TEMP", "TMP"],
+      "tool_contracts": {
+        "sugar_persona_set": { "effect": "workspace_write" },
+        "sugar_person_add": { "effect": "workspace_write" },
+        "sugar_person_remove": { "effect": "workspace_write" },
+        "sugar_channel_set": { "effect": "workspace_write" },
+        "sugar_wechat_login": { "effect": "workspace_write" }
+      }
+    }
+  }
+}
