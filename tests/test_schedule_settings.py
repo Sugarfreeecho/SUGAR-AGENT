@@ -151,6 +151,26 @@ async def test_new_chat_runs_are_independent_and_waiting_notifications_survive_s
 
 
 @run_async
+async def test_new_once_creates_one_session_and_reuses_it(composed):
+    c = composed
+    await c.control.start()
+    task = (await native(c, "automation.create", {"name": "Reuse target", "notification": "never",
+        "trigger": {"kind": "interval", "seconds": 3600}, "target": {"mode": "new_once"}, "workspace": str(c.root),
+        "action": {"kind": "prompt", "text": "work"}})).json()["data"]
+    assert task["target"]["mode"] == "new_once"
+    for attempt in range(2):
+        run = (await asyncio.wait_for(native(c, "automation.run", {"id": task["id"]}, key=f"once-{attempt}"), 5)).json()["data"]
+        result, _ = await c.service.execute(c.admin, "operation.wait", {"id": run["execution_id"], "timeout": 3})
+        assert result["status"] == "succeeded"
+    stored = c.store.get("automations", task["id"])
+    assert stored["target"]["mode"] == "new_once"
+    assert stored.get("target_session_id")
+    assert len(c.manager.list_sessions()) == 1
+    assert len({call[0] for call in c.calls}) == 1
+    await c.control.close()
+
+
+@run_async
 async def test_important_notifications_cover_approval_but_skip_already_finished_requests(composed):
     from session_control.notifications import deliver_notifications
     c = composed

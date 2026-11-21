@@ -720,8 +720,17 @@ textarea.st-input.st-skill-sources { min-height: 56px; }
 .st-schedule-toolbar, .st-schedule-item-head, .st-schedule-meta, .st-schedule-actions {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
-.st-schedule-toolbar { margin-bottom: 16px; }
+.st-schedule-toolbar { margin-bottom: 16px; flex-wrap: wrap; }
+.st-schedule-filters { display: flex; flex-wrap: wrap; gap: 4px; }
+.st-schedule-filters .st-btn.is-on { background: var(--st-nav-active); color: var(--st-text); }
 .st-schedule-item { border: 1px solid var(--st-border); border-radius: 14px; padding: 18px; margin-bottom: 14px; min-width: 0; }
+.st-schedule-row { display: flex; align-items: center; gap: 16px; padding: 14px 16px; border-radius: 12px; margin-bottom: 10px; }
+.st-schedule-row-main { flex: 1; min-width: 0; }
+.st-schedule-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.st-schedule-row-title h3 { margin: 0; }
+.st-schedule-row-sub { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; color: var(--st-text-2); font-size: var(--st-fs-xs); }
+.st-schedule-row-sub span { min-width: 0; overflow-wrap: anywhere; }
+.st-schedule-row-actions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 2px; max-width: 46%; }
 .st-schedule-item-head { align-items: flex-start; }
 .st-schedule-item h3 { margin: 0 0 4px; font-size: var(--st-fs); overflow-wrap: anywhere; }
 .st-schedule-description { color: var(--st-text-2); margin: 14px 0; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
@@ -732,17 +741,92 @@ textarea.st-input.st-skill-sources { min-height: 56px; }
 .st-schedule-empty svg, .st-schedule-empty p { color: var(--st-text-2); }
 .st-schedule-empty h3 { margin: 12px 0 4px; }
 .st-schedule-error { color: var(--st-danger); white-space: pre-wrap; overflow-wrap: anywhere; }
-.st-modal .st-box.form:has(.st-schedule-form) { width: 680px; max-height: min(900px, 92vh); border-radius: 20px; }
-.st-schedule-form { padding: 18px 0 8px; }
+.st-modal .st-box.form:has(.st-schedule-form) { width: 600px; max-height: min(860px, 92vh); border-radius: 18px; }
+.st-schedule-form { padding: 12px 0 6px; }
+.st-schedule-section { margin: 0 0 12px; }
+.st-schedule-section-title { display: block; margin: 0 0 6px; font-size: var(--st-fs); font-weight: 500; }
+.st-schedule-section > .st-input { width: 100%; height: 38px; border-radius: 10px; }
+.st-schedule-section > textarea.st-input { height: 120px; min-height: 120px; border-radius: 10px; }
+.st-schedule-group .st-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); padding: 9px 0; }
+.st-schedule-form .st-schedule-group { overflow: visible; }
+.st-schedule-form .st-adv .st-card { overflow: visible; }
+.st-schedule-group .st-label { font-size: var(--st-fs); }
+.st-schedule-group .st-ctl { min-width: 0; }
+.st-schedule-choice { width: auto; border: 0; background-color: transparent; text-align: right; font: inherit; color: inherit; }
+.st-schedule-select { position: relative; display: inline-flex; align-items: center; width: 100%; max-width: 100%; min-width: 0; }
+.st-schedule-native { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; }
+.st-schedule-select-trigger {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px; width: 100%; min-height: 22px; padding: 0;
+  border: 0; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer;
+}
+.st-schedule-select-trigger:focus-visible { outline: 2px solid var(--st-accent); outline-offset: 3px; border-radius: 6px; }
+.st-schedule-select-trigger span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-schedule-select-pop {
+  position: absolute; z-index: 90; top: calc(100% + 6px); right: 0; width: max-content; min-width: 100%;
+  max-width: min(320px, calc(100vw - 64px)); max-height: 280px; overflow-y: auto; padding: 4px;
+  border: 1px solid var(--st-border); border-radius: 10px; background: var(--st-panel); box-shadow: var(--st-shadow-panel);
+}
+.st-schedule-select-pop.is-up { top: auto; bottom: calc(100% + 6px); }
+.st-schedule-select-pop[hidden] { display: none; }
+.st-schedule-select-option {
+  display: block; width: 100%; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--st-text); font: inherit; text-align: left; cursor: pointer;
+}
+.st-schedule-select-option:hover, .st-schedule-select-option.is-on { background: var(--st-nav-active); }
+.st-schedule-select-option:focus-visible { outline: 2px solid var(--st-accent); outline-offset: -2px; }
+.st-schedule-value { display: inline-flex; align-items: center; justify-content: flex-end; gap: 7px; width: 100%; }
+.st-schedule-group input.st-schedule-inline { padding: 0; }
+.st-schedule-group input[data-field="time"], .st-schedule-group input[data-field="date_value"], .st-schedule-group input[data-field="clock_value"] {
+  width: auto; border: 0; background: transparent; text-align: right; padding: 0;
+}
+.st-schedule-inline::-webkit-calendar-picker-indicator { display: none; }
+.st-schedule-icon {
+  display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none;
+  padding: 0; border: 0; background: transparent; color: var(--st-text-3); cursor: pointer;
+}
+.st-schedule-icon:hover { color: var(--st-text); }
+.st-schedule-icon:focus-visible { outline: 2px solid var(--st-accent); outline-offset: 2px; border-radius: 4px; }
+.st-schedule-tz { position: relative; min-width: 0; }
+.st-schedule-tz-trigger { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; width: 100%; max-width: 100%; padding: 0; cursor: pointer; }
+.st-schedule-tz-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-schedule-chevron { flex: none; color: var(--st-text-3); }
+.st-schedule-tz-pop {
+  position: absolute; z-index: 80; bottom: calc(100% + 8px); right: 0; width: min(360px, calc(100vw - 64px));
+  max-height: 330px; display: flex; flex-direction: column; padding: 8px; border: 1px solid var(--st-border);
+  border-radius: 12px; background: var(--st-panel); box-shadow: var(--st-shadow-panel);
+}
+.st-schedule-tz-pop[hidden] { display: none; }
+.st-schedule-tz-pop .st-input { height: 34px; flex: none; margin-bottom: 6px; }
+.st-schedule-tz-list { min-height: 0; overflow-y: auto; }
+.st-schedule-tz-head { padding: 7px 8px 4px; color: var(--st-text-3); font-size: var(--st-fs-xs); }
+.st-schedule-tz-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 8px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--st-text); text-align: left; cursor: pointer;
+}
+.st-schedule-tz-option:hover, .st-schedule-tz-option.is-on { background: var(--st-nav-hover); }
+.st-schedule-tz-option > span:first-child { min-width: 0; display: flex; flex-direction: column; }
+.st-schedule-tz-option b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-schedule-tz-option small { color: var(--st-text-3); font-size: var(--st-fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-schedule-tz-option > span:last-child { flex: none; color: var(--st-text-2); font-size: var(--st-fs-xs); font-variant-numeric: tabular-nums; }
+.st-schedule-tz-empty { padding: 16px 8px; color: var(--st-text-2); text-align: center; }
+.st-schedule-group .path-input-row { border: 0; background: transparent; justify-content: flex-end; }
+.st-schedule-group .path-input-row > input { flex: 0 1 auto; width: min(240px, 100%); border: 0; background: transparent; text-align: right; }
+.st-schedule-group .path-browse-btn { border: 0; background: transparent; padding: 0 4px; }
+.st-schedule-group input[data-field="workspace"] { width: auto; max-width: 240px; border: 0; background: transparent; text-align: right; padding: 0; }
 .st-schedule-field { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; min-width: 0; }
 .st-schedule-field > span { color: var(--st-text-2); font-size: var(--st-fs-sm); }
-.st-schedule-form .st-card { margin: 16px 0; padding: 0 14px; border-radius: 16px; }
+.st-schedule-form .st-card { margin: 10px 0; padding: 0 12px; border-radius: 12px; }
 .st-schedule-form .st-card .st-schedule-field { padding-left: 0; padding-right: 0; }
 .st-schedule-form > .st-schedule-field { padding: 0; margin-bottom: 16px; }
-textarea.st-input.st-schedule-prompt { min-height: 150px; font-family: var(--st-sans); font-size: var(--st-fs); border-radius: 14px; }
-.st-schedule-form .st-row { padding: 14px 0; }
+.st-schedule-prompt-field { padding: 0 14px 14px !important; }
+.st-schedule-preserved { padding: 0 0 10px; }
+.st-schedule-prompt-config { padding: 0 0 10px; }
+.st-schedule-prompt-config[hidden] { display: none; }
+.st-schedule-prompt-config textarea { width: 100%; min-height: 84px; border-radius: 10px; resize: vertical; }
+textarea.st-input.st-schedule-prompt { min-height: 120px; font-family: var(--st-sans); font-size: var(--st-fs); border-radius: 10px; }
+.st-schedule-form .st-row { padding: 9px 0; }
 .st-schedule-form .st-ctl { min-width: 0; }
-.st-schedule-form .st-adv { margin: 18px 0 0; }
+.st-schedule-form .st-adv { margin: 12px 0 0; }
 .st-schedule-form .st-adv > .st-inner { padding: 0; }
 .st-schedule-weekdays { display: flex; flex-wrap: wrap; gap: 6px; }
 .st-schedule-weekdays label { cursor: pointer; position: relative; }
@@ -760,6 +844,8 @@ textarea.st-input.st-schedule-prompt { min-height: 150px; font-family: var(--st-
 @media (max-width: 600px) {
   .st-schedule-toolbar { align-items: flex-start; }
   .st-schedule-toolbar .st-acts { flex-wrap: wrap; justify-content: flex-end; }
+  .st-schedule-row { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .st-schedule-row-actions { max-width: none; justify-content: flex-start; }
   .st-modal .st-schedule-form .st-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .st-schedule-form .st-ctl { justify-content: flex-start; }
   .st-schedule-form .st-ctl > .st-input { width: 100%; }

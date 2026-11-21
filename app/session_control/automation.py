@@ -1,6 +1,7 @@
 """Backend-owned schedules and persistent event rules. No model polling."""
 from __future__ import annotations
 
+import asyncio
 import copy
 import dataclasses
 import hashlib
@@ -41,6 +42,64 @@ class AutomationService:
         # Immediate delivery and periodic maintenance can reach the same
         # durable cursor concurrently. Fixed stripes bound lock ownership.
         self._bridge_locks = [threading.Lock() for _ in range(64)]
+        # One deadline wake-up replaces the old twice-per-second scan. The
+        # monitor heartbeat remains only as a safety net for clock changes and
+        # externally written rows.
+        self._wake_handle = None
+
+    def next_due_at(self):
+        """Earliest future (or already due) time trigger, or None when idle."""
+        due = [task.get("next_run_at") for task in self.store.list("automations")
+               if task.get("enabled") and not task.get("deleted")
+               and task.get("trigger", {}).get("kind") != "event"
+               and task.get("next_run_at") is not None]
+        return min(due) if due else None
+
+    def cancel_wake(self):
+        if self._wake_handle is not None:
+            self._wake_handle.cancel()
+            self._wake_handle = None
+
+    def rearm(self):
+        """Point one loop timer at the nearest schedule deadline.
+
+        Called after a task mutation and after every tick. No task means no
+        timer, so an idle backend performs no schedule work at all.
+        """
+        loop = getattr(self.control, "loop", None)
+        if loop is None or loop.is_closed() or getattr(self.control, "closing", False):
+            return
+
+        def apply():
+            self.cancel_wake()
+            due = self.next_due_at()
+            if due is None:
+                return
+            # A due task that could not be admitted stays due; retry at a
+            # bounded cadence instead of spinning on an already elapsed timer.
+            delay = due - time.time()
+            self._wake_handle = loop.call_later(delay if delay > .05 else 1.0, self._wake)
+
+        try:
+            on_loop = asyncio.get_running_loop() is loop
+        except RuntimeError:
+            on_loop = False
+        if on_loop:
+            apply()
+        else:
+            try:
+                loop.call_soon_threadsafe(apply)
+            except RuntimeError:
+                pass
+
+    def _wake(self):
+        self._wake_handle = None
+        if getattr(self.control, "closing", False):
+            return
+        try:
+            self.control.monitors.wake(self.control.monitor_key)
+        except Exception:
+            log.exception("Automation wake failed")
 
     async def mutate(self, principal, method, p, operation):
         family = "sources" if method.startswith("event_source.") else "automations"
@@ -90,8 +149,8 @@ class AutomationService:
                     value.pop("completed", None)
                     value.pop("last_error", None)
                 target = value.get("target")
-                if not isinstance(target, dict) or target.get("mode") not in {"existing", "new"}:
-                    raise ControlError("invalid_target", "target.mode must be existing or new")
+                if not isinstance(target, dict) or target.get("mode") not in {"existing", "new", "new_once"}:
+                    raise ControlError("invalid_target", "target.mode must be existing, new or new_once")
                 workspace = value.get("workspace")
                 if target["mode"] == "existing":
                     sid = target.get("session_id", "")
@@ -102,6 +161,8 @@ class AutomationService:
                     raise ControlError("invalid_target", "New-session tasks require workspace")
                 self.control.check_workspace(principal, workspace)
                 value["workspace"] = workspace
+                if target["mode"] != "new_once":
+                    value.pop("target_session_id", None)
                 value["policy"] = validate_policy(value.get("policy"), workspace=workspace,
                                                    current_session=target.get("session_id", ""))
                 if not principal.admin:
@@ -140,6 +201,7 @@ class AutomationService:
         if family == "sources" and action == "create":
             public["secret"] = row["secret"]
         await self.control.start()
+        self.rearm()
         return public
 
     async def fire(self, task, key, occurrence, *, event=None, manual=False, runtime_override=None):
@@ -167,6 +229,18 @@ class AutomationService:
             created, _ = await self.control.execute(principal, "session.create", {"name": task["name"], "work_dir": task["workspace"]},
                                                      idempotency_key="auto-create:" + hashlib.sha256(trigger_key.encode()).hexdigest())
             sid = created["session_id"]
+        elif target["mode"] == "new_once":
+            sid = task.get("target_session_id")
+            if not sid:
+                created, _ = await self.control.execute(principal, "session.create", {"name": task["name"], "work_dir": task["workspace"]},
+                                                        idempotency_key="auto-create:" + hashlib.sha256(task["id"].encode()).hexdigest())
+                sid = created["session_id"]
+                try:
+                    self.store.put("automations", task["id"], {**task, "target_session_id": sid},
+                                   expected=task["revision"])
+                except ControlError as exc:
+                    if exc.code != "revision_conflict":
+                        raise
         else:
             sid = target["session_id"]
         check_session(principal, sid, self.control.manager)
@@ -192,6 +266,12 @@ class AutomationService:
         return result
 
     async def tick(self):
+        try:
+            await self._tick_once()
+        finally:
+            self.rearm()
+
+    async def _tick_once(self):
         now = time.time()
         for task in self.store.list("automations"):
             if not task.get("enabled") or task.get("deleted") or task.get("next_run_at") is None or task["next_run_at"] > now:

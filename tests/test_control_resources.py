@@ -3,6 +3,7 @@ import asyncio
 import contextvars
 import dataclasses
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -134,6 +135,36 @@ async def test_schedule_keeps_its_due_occurrence_when_admission_is_full(tmp_path
         assert len(store.operations(status="queued")) == 1
     finally:
         resources.close()
+
+
+@run_async
+async def test_schedule_rearm_targets_nearest_deadline_and_clears_when_idle(tmp_path):
+    import session_control.automation as automation
+    store = ControlStore(tmp_path / "control.db")
+    now = time.time()
+    trigger = {"kind": "interval", "seconds": 60, "anchor": now}
+    later = store.put("automations", "later", {"enabled": True, "trigger": trigger, "next_run_at": now + 120})
+    store.put("automations", "next", {"enabled": True, "trigger": trigger, "next_run_at": now + 60})
+    loop = asyncio.get_running_loop()
+    engine = automation.AutomationService(SimpleNamespace(
+        store=store, loop=loop, closing=False, monitor_key="control",
+        monitors=SimpleNamespace(wake=lambda _key: None)))
+    try:
+        engine.rearm()
+        assert engine._wake_handle is not None
+        assert 55 < engine._wake_handle.when() - loop.time() <= 61
+
+        store.put("automations", "next", {**store.get("automations", "next"), "enabled": False},
+                  expected=store.get("automations", "next")["revision"])
+        engine.rearm()
+        assert engine._wake_handle is not None
+        assert 115 < engine._wake_handle.when() - loop.time() <= 121
+
+        store.put("automations", "later", {**later, "enabled": False}, expected=later["revision"])
+        engine.rearm()
+        assert engine._wake_handle is None
+    finally:
+        engine.cancel_wake()
 
 
 @pytest.fixture

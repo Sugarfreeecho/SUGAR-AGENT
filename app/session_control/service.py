@@ -49,6 +49,7 @@ class SessionControlService:
         self._dispatch_lock = asyncio.Lock()
         self._dispatch_task = None
         self._dispatch_requested = False
+        self._dispatch_retry = None
         from .resources import ControlResources
         from .monitors import MonitorKey, SharedMonitorHub
         self.monitor_key = MonitorKey.make("control", str(self.store.path), namespace="@control")
@@ -132,7 +133,8 @@ class SessionControlService:
         # Existing trusted transport adapters carry authenticated DevicePrincipal.
         caps = ["read"] if p.permits("read") else []
         if p.permits("write"):
-            caps += ["session.create", "session.send", "session.steer", "session.interrupt"]
+            # 插件需要 session.update 才能改标题/模型/目录、给群会话打共享标记
+            caps += ["session.create", "session.send", "session.steer", "session.interrupt", "session.update"]
         if p.permits("approvals"):
             caps += ["approval.list", "approval.resolve"]
         return Principal(p.device_id, p.name, p.permits("admin"), {"scope": "all", "capabilities": caps}, p.credential_kind)
@@ -275,6 +277,15 @@ class SessionControlService:
         owner = str(meta.get("created_by") or "")
         subject = fields["subject"]
         allowed = owner == subject
+        if not allowed and meta.get("shared"):
+            # 会话被显式标记为共享（IM 群聊）：谁建的、怎么绑的都不影响，
+            # 群成员各自带 _level/_subject 进入同一会话。共享标记由创建者设置。
+            allowed = True
+        if not allowed and fields["level"] == "group":
+            # 同一来源的群成员：插件创建的群会话允许同来源身份进入，
+            # 来源不同仍按归属拒绝。
+            source = str((params.get("_source") or {}).get("id") or "")
+            allowed = bool(source) and source == str(meta.get("origin") or "")
         if axis <= 1:
             current = str(principal.policy.get("current_session") or "")
             allowed = allowed or (bool(current) and current == sid)
@@ -577,6 +588,9 @@ class SessionControlService:
         if method == "session.create":
             if p.get("runtime_config") is not None:
                 validate_config(p["runtime_config"])
+            if p.get("shared"):
+                # IM 群聊会话在创建时就标记共享，避免创建后还要一次 session.update
+                pass
             workspace = p.get("work_dir") or principal.policy.get("workspace")
             if not workspace:
                 from agent_harness import WORK_DIR
@@ -593,6 +607,8 @@ class SessionControlService:
                     raise ControlError("unsupported_backend", "Backend lacks deterministic session creation", status=409)
             if p.get("name"):
                 await asyncio.to_thread(self.manager.set_session_name, target, str(p["name"])[:160])
+            if p.get("shared"):
+                await asyncio.to_thread(self.manager.set_session_shared, target, True)
             if p.get("runtime_config"):
                 cfg = validate_config(p["runtime_config"])
                 await self.validate_bindings(target, cfg)
@@ -619,9 +635,17 @@ class SessionControlService:
         if method == "session.update":
             if any(field in p for field in ("model_profile_id", "reasoning_effort")):
                 self.authorize(principal, "session.config.update", p)
-            unknown = set(p) - {"session_id", "name", "pinned", "favorite", "todo", "work_dir", "model_profile_id", "reasoning_effort"}
+            unknown = set(p) - {"session_id", "name", "pinned", "favorite", "todo", "work_dir", "model_profile_id",
+                                "reasoning_effort", "shared"}
             if unknown:
                 raise ControlError("invalid_params", "Unsupported session fields")
+            if "shared" in p:
+                meta = self.manager._load_metadata(sid) or {}
+                owner = str(meta.get("created_by") or "")
+                if not principal.admin and owner and owner != str(principal.id):
+                    if owner != str((self._actor_fields(principal, p) or {}).get("subject") or ""):
+                        raise ControlError("scope_denied", "Only the creator can change sharing", status=403)
+                await asyncio.to_thread(self.manager.set_session_shared, sid, bool(p["shared"]))
             for key, func in (("name", self.manager.set_session_name), ("pinned", self.manager.set_session_pinned), ("favorite", self.manager.set_session_favorite), ("todo", self.manager.set_session_todo)):
                 if key in p:
                     await asyncio.to_thread(func, sid, p[key])
@@ -814,13 +838,19 @@ class SessionControlService:
                 self.store.update_operation(op["id"], status="unknown", error={"code": "process_interrupted", "message": "Inspect or recover the original run"})
         await self.monitors.start()
         if self.monitor_key not in self.monitors.sources:
-            self.monitors.subscribe(self.monitor_key, "@control", self._tick, interval=.5,
+            # Deadlines wake this source exactly; the interval is only a safety
+            # net for clock jumps and rows written outside this process.
+            self.monitors.subscribe(self.monitor_key, "@control", self._tick, interval=30.,
                 events=("run_finished", "run_failed", "run_interrupted", "user_turn_committed", "interaction_resolved", "lifecycle_changed"))
+        self.engine.rearm()
         self.task = self.monitors.task
         self._request_dispatch()
 
     async def close(self):
         self.closing = True
+        if self._dispatch_retry is not None:
+            self._dispatch_retry.cancel()
+            self._dispatch_retry = None
         dispatch, self._dispatch_task = self._dispatch_task, None
         if dispatch and dispatch is not asyncio.current_task():
             dispatch.cancel()
@@ -836,6 +866,8 @@ class SessionControlService:
             from session_event_bus import remove_event_listener
             remove_event_listener(self.engine._listener)
             self.engine._listener = None
+        if self.engine:
+            self.engine.cancel_wake()
         self.resources.close()
 
     def _runtime_ready(self):
@@ -862,6 +894,18 @@ class SessionControlService:
                     log.exception('Immediate control dispatch failed; durable queue retained')
         self._dispatch_task.add_done_callback(finished)
 
+    def _schedule_dispatch_retry(self, delay=.5):
+        """Retry only while admitted work is blocked, never on an idle queue."""
+        if self.closing or not self.loop or not self.loop.is_running():
+            return
+        if self._dispatch_retry is not None:
+            return
+        self._dispatch_retry = self.loop.call_later(delay, self._dispatch_retry_fire)
+
+    def _dispatch_retry_fire(self):
+        self._dispatch_retry = None
+        self._request_dispatch()
+
     def _reap_workers(self):
         for sid, (task, operation) in list(self.workers.items()):
             if task.done():
@@ -887,6 +931,11 @@ class SessionControlService:
                         # A full bridge batch advanced the durable dedup cursor.
                         # Drain the next batch without another maintenance cycle.
                         self._request_dispatch()
+            # A busy session, a full worker pool or a pending human leaves
+            # admitted work queued. Wake only for that queue, not for an idle
+            # backend, so pausing a session does not restore the old 2 Hz scan.
+            if self.store.pending_heads():
+                self._schedule_dispatch_retry()
 
     async def _tick(self):
         if self.closing:

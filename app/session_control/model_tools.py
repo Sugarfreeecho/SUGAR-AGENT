@@ -222,6 +222,8 @@ async def _execute(context, arguments, *, read):
                 raise ControlError("invalid_schedule", "This tool can manually run prompt tasks only")
             if row["target"]["mode"] == "existing":
                 app.service.authorize(actor, "session.send", {"session_id": row["target"]["session_id"]})
+            elif row["target"]["mode"] == "new_once" and row.get("target_session_id"):
+                app.service.authorize(actor, "session.send", {"session_id": row["target_session_id"]})
             else:
                 app.service.authorize(actor, "session.create", {})
                 if not actor.permits("session.send"):

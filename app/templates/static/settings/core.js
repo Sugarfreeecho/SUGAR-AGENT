@@ -212,6 +212,7 @@
     $('#st-dlg-sub').hidden = !cfg.sub;
     $('#st-dlg-body').innerHTML = cfg.body || '';
     $('#st-dlg-ok').textContent = cfg.okText || t('保存', 'Save');
+    $('#st-dialog [data-act="dlg-cancel"]').textContent = cfg.cancelText || t('取消', 'Cancel');
     $('#st-dialog').hidden = false;
     if (cfg.after) {
       const cleanup = cfg.after($('#st-dlg-body'));

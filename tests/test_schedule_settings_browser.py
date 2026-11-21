@@ -94,15 +94,16 @@ def test_task_create_edit_pause_run_history_and_delete(schedules):
     s, page = schedules, schedules.page
     assert page.locator('[data-act="nav"][data-id="schedules"]').inner_text() == "定时任务"
     fill_basic(page)
+    page.locator('[data-field="target_mode"]').select_option("existing")
     page.locator('[data-field="repeat"]').select_option("weekly")
     page.locator('[data-weekday="5"]').check()
     page.locator('[data-field="time"]').fill("10:30")
+    page.locator('.st-schedule-form .st-adv summary').click()
     page.locator('[data-field="model"]').select_option("p1")
-    page.locator('[data-field="prompt_mode"]').select_option("replace")
+    page.locator('[data-field="prompt_mode"]').select_option("append")
     page.locator('[data-field="system_text"]').fill("Review charter")
-    page.locator('[data-field="tools_mode"]').select_option("custom")
-    page.locator('[data-tool-ref]').first.check()
-    page.locator('[data-key="read_only"]').click()
+    page.locator('[data-field="notification"]').select_option("always")
+    page.locator('[data-field="misfire"]').select_option("skip")
     page.locator('#st-dlg-ok').click()
     page.locator('#st-dialog').wait_for(state="hidden")
     page.locator('.st-schedule-item h3').wait_for()
@@ -110,10 +111,10 @@ def test_task_create_edit_pause_run_history_and_delete(schedules):
     assert task["trigger"]["weekdays"] == [1, 5]
     assert task["trigger"]["time"] == "10:30"
     assert task["target"] == {"mode": "existing", "session_id": "s1"}
-    assert task["runtime_override"]["tools"]["allow"][0]["name"] == "read_file"
-    assert task["runtime_override"]["system_prompt"] == {"mode": "replace", "text": "Review charter"}
-    assert task["runtime_override"]["read_only"] is True
-    assert task["notification"] == "important"
+    assert task["runtime_override"]["model_profile_id"] == "p1"
+    assert task["runtime_override"]["system_prompt"] == {"mode": "append", "text": "Review charter"}
+    assert task["notification"] == "always"
+    assert task["misfire"] == "skip"
     page.locator('[data-act="schedule-toggle"]').click()
     page.wait_for_function("document.querySelector('[data-act=schedule-toggle]')?.textContent==='启用'")
     page.locator('[data-act="schedule-run"]').click()
@@ -125,8 +126,9 @@ def test_task_create_edit_pause_run_history_and_delete(schedules):
     page.locator('.st-schedule-run').wait_for(state="detached")
     page.locator('#st-dlg-ok').click()
     page.locator('[data-act="schedule-edit"]').click()
+    page.locator('.st-schedule-form .st-adv summary').click()
+    assert page.locator('[data-field="model"]').input_value() == "p1"
     assert page.locator('[data-field="system_text"]').input_value() == "Review charter"
-    assert page.locator('[data-tool-ref]').first.is_checked()
     page.locator('[data-field="name"]').fill("Updated review")
     page.locator('#st-dlg-ok').click()
     page.locator('#st-dialog').wait_for(state="hidden")
@@ -137,20 +139,91 @@ def test_task_create_edit_pause_run_history_and_delete(schedules):
     assert not s.items
 
 
-def test_new_chat_empty_tools_timezone_conflict_and_unsaved_guard(schedules):
+def test_hidden_execution_settings_survive_a_name_edit(schedules):
+    s, page = schedules, schedules.page
+    original = {"system_prompt": {"mode": "replace", "text": "Review charter"},
+                "tools": {"mode": "custom", "allow": [{"kind": "host", "owner": "core.tools", "name": "read_file"}]},
+                "read_only": True, "limits": {"timeout_seconds": 90}}
+    s.items.append({"id": "legacy", "name": "Legacy review", "enabled": True, "revision": 1,
+                    "next_run_at": 1903914000, "trigger": {"kind": "daily", "time": "09:00", "time_zone": "Asia/Shanghai"},
+                    "target": {"mode": "existing", "session_id": "s1"}, "action": {"kind": "prompt", "text": "Review"},
+                    "runtime_override": original})
+    page.reload()
+    page.locator('[data-act="schedule-edit"]').click()
+    page.locator('[data-field="name"]').fill("Renamed legacy")
+    page.locator('#st-dlg-ok').click()
+    page.locator('#st-dialog').wait_for(state="hidden")
+    assert s.items[0]["runtime_override"] == original
+
+
+def test_timezone_picker_shows_offset_and_searches_offset(schedules):
+    page = schedules.page
+    fill_basic(page)
+    output = ROOT / '.analysis/schedule-settings'
+    page.screenshot(path=str(output / 'default.png'))
+    page.evaluate("document.getElementById('st-dlg-body').scrollTop = 9999")
+    page.screenshot(path=str(output / 'once.png'))
+    page.locator('[data-tz-trigger]').click()
+    assert page.locator('[data-tz-pop]').is_visible()
+    page.locator('[data-tz-search]').fill("UTC+08:00")
+    page.screenshot(path=str(output / 'timezone-open.png'))
+    option = page.locator('[data-tz-zone="Asia/Shanghai"]')
+    assert "Shanghai" not in option.inner_text()
+    assert "中国标准时间" in option.inner_text()
+    option.click()
+    label = page.locator('[data-tz-label]').inner_text()
+    assert "UTC+08:00" in label
+    assert "Asia/Shanghai" not in label
+    assert "中国标准时间" in label
+    page.screenshot(path=str(output / 'timezone.png'))
+    page.evaluate("MyAgentSettings.closeDialog(true)")
+
+
+def test_custom_select_menu_click_area_and_option_pick(schedules):
+    page = schedules.page
+    page.evaluate("localStorage.setItem('myagent-theme', 'deep-dark')")
+    page.reload()
+    fill_basic(page)
+    trigger = page.locator('[data-select-trigger="target_mode"]')
+    box = trigger.bounding_box()
+    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    pop = page.locator('[data-select-pop="target_mode"]')
+    assert pop.is_visible()
+    assert page.locator('[data-select-pop="target_mode"] [data-select-value]').count() == 3
+    page.screenshot(path=str(ROOT / '.analysis/schedule-settings' / 'select-open.png'))
+    page.locator('[data-select-value="new"]').click()
+    assert page.locator('[data-select-label="target_mode"]').inner_text() == "每次新建会话"
+    page.evaluate("MyAgentSettings.closeDialog(true)")
+
+
+def test_new_once_target_is_default_and_persists(schedules):
     s, page = schedules, schedules.page
     fill_basic(page)
-    page.locator('[data-key="new_chat"]').click()
-    assert page.locator('[data-schedule-new]').is_visible()
+    assert page.locator('[data-field="target_mode"]').input_value() == "new_once"
+    assert page.locator('[data-field="workspace"]').is_enabled()
+    assert not page.locator('[data-schedule-existing]').is_visible()
+    page.locator('#st-dlg-ok').click()
+    page.locator('#st-dialog').wait_for(state="hidden")
+    assert s.items[0]["target"] == {"mode": "new_once"}
+    assert s.items[0]["workspace"] == "D:/Example"
+
+
+def test_new_chat_timezone_conflict_and_unsaved_guard(schedules):
+    s, page = schedules, schedules.page
+    fill_basic(page)
+    page.locator('[data-field="target_mode"]').select_option("new")
+    assert page.locator('[data-field="workspace"]').is_enabled()
     assert not page.locator('[data-schedule-existing]').is_visible()
     page.locator('[data-field="repeat"]').select_option("at")
-    page.locator('[data-field="local_at"]').fill("2030-04-01T09:00")
-    page.locator('[data-field="timezone"]').fill("Asia/Shanghai")
-    page.locator('[data-field="tools_mode"]').select_option("custom")
+    page.locator('[data-field="date_value"]').fill("2030-04-01")
+    page.locator('[data-field="clock_value"]').fill("09:00")
+    page.locator('[data-tz-trigger]').click()
+    page.locator('[data-tz-search]').fill("Shanghai")
+    page.locator('[data-tz-zone="Asia/Shanghai"]').click()
+    assert "UTC+08:00" in page.locator('[data-tz-label]').inner_text()
     page.locator('#st-dlg-ok').click()
     page.locator('#st-dialog').wait_for(state="hidden")
     assert s.items[0]["target"] == {"mode": "new"}
-    assert s.items[0]["runtime_override"]["tools"]["allow"] == []
     assert s.items[0]["trigger"]["local_at"] == "2030-04-01T09:00"
     page.locator('[data-act="schedule-edit"]').click()
     page.locator('[data-field="name"]').fill("Unsaved")
@@ -190,7 +263,7 @@ def test_schedule_editor_layout_and_visible_validation(schedules, width, theme):
     output = ROOT / '.analysis/schedule-settings'
     output.mkdir(parents=True, exist_ok=True)
     page.screenshot(path=str(output / ('desktop.png' if width > 600 else 'mobile.png')))
-    page.locator('[data-key="new_chat"]').click()
+    page.locator('[data-field="target_mode"]').select_option('new')
     page.locator('[data-field="workspace"]').fill('')
     page.locator('#st-dlg-ok').click()
     page.locator('#st-schedule-error').wait_for(state='visible')
