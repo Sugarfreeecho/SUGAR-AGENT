@@ -74,9 +74,15 @@ export async function prepareBrowserAssets({ repo=REPO, cache=path.join(repo,'pa
     fs.writeFileSync(stamp,JSON.stringify({lockDigest}))
   }
   log('· 构建 SugarAgent 浏览器扩展…')
-  run(process.execPath,[npm,'ci','--no-audit','--no-fund'],extension,env)
-  run(process.execPath,[npm,'run','build'],extension,env)
-  run(process.execPath,[npm,'run','package'],extension,env)
+  const reuseDist = process.env.SUGARAGENT_SKIP_BROWSER_BUILD === '1'
+    && fs.existsSync(path.join(extension,'dist','manifest.json'))
+  if (reuseDist) {
+    log('· 复用现有扩展构建产物（SUGARAGENT_SKIP_BROWSER_BUILD=1）')
+  } else {
+    run(process.execPath,[npm,'ci','--no-audit','--no-fund'],extension,env)
+    run(process.execPath,[npm,'run','build'],extension,env)
+    run(process.execPath,[npm,'run','package'],extension,env)
+  }
   const version = readJson(path.join(extension,'package.json')).version
   const pluginVersion = readJson(path.join(repo,'plugins/browser-use/.myagent-plugin/plugin.json')).version
   if (version !== pluginVersion || readJson(path.join(extension,'dist/manifest.json')).version !== version) throw new Error('浏览器扩展、dist 与宿主版本不一致')
